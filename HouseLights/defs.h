@@ -4,3 +4,8 @@ typedef struct {
 	byte minute;
 	byte second;
 } time_si;
+
+typedef struct {
+	boolean no_error;
+	time_si result;
+} time_safe;

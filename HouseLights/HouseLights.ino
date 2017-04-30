@@ -8,9 +8,9 @@
 #include <ArduinoJson.h>
 #include "defs.h"
 
-#define SUNSET_WARN 1200
+#define SUNSET_WARN -600
 #define POWER_MIN_SEC 0
-#define POWER_MAX_SEC 7200
+#define POWER_MAX_SEC 4000
 #define UTC_OFFSET_HOUR 2
 
 const char* wifi_ssid = "***REMOVED***";
@@ -54,7 +54,7 @@ time_si parseTimeH24(String time) {
 		t.hour = static_cast<byte>(atoi(getValue(time, ':', 0).substring(0, 2).c_str()));
 	}
 	else { // Convert to 24 hour
-		t.hour = static_cast<byte>(24 - atoi(getValue(time, ':', 0).substring(0, 2).c_str()));
+		t.hour = static_cast<byte>(12 + atoi(getValue(time, ':', 0).substring(0, 2).c_str()));
 	}
 
 	t.minute = static_cast<byte>(atoi(getValue(time, ':', 1).c_str()));
@@ -103,10 +103,17 @@ void loop() {
 		now_time.minute = timeClient.getMinutes();
 		now_time.second = timeClient.getSeconds();
 
-		String sunset = getApiSunrise();
+		time_safe sunset = getApiSunrise();
 
-		parsedSunset = parseTimeH24(sunset);
-		parsedSunset.hour += UTC_OFFSET_HOUR; // UTC Belgium
+		if (sunset.no_error) {
+			if (autoDebug)
+				Serial.println("Successfully retrieved sunset hour");
+			parsedSunset = sunset.result;
+			parsedSunset.hour += UTC_OFFSET_HOUR; // UTC Belgium
+		}
+		else {
+			Serial.println("Didn't retrieve sunset hour");
+		}
 
 		if (autoDebug)
 			printInfos();
@@ -169,7 +176,7 @@ void loop() {
 void printInfos() {
 	printWifiSignalStrength();
 	Serial.println(String{ "Current time : " } + timeClient.getFormattedTime());
-	Serial.println(String{ "Sunset is at : " } +parsedSunset.hour + ":" + parsedSunset.minute + ":" + parsedSunset.second);
+	Serial.println(String{ "Sunset is at : " } + parsedSunset.hour + ":" + parsedSunset.minute + ":" + parsedSunset.second);
 	if (lightsState != -1)
 		Serial.println(String{ "Warning : Lights are not set to automatic (" } + static_cast<int>(lightsState) + ") !" );
 	mustBeOn(now_time, parsedSunset, true);
@@ -197,31 +204,36 @@ bool mustBeOn(time_si now, time_si sunset, bool print) {
 	int now_time = getTimeSecond(now);
 	int sunset_in_s = sunset_time - now_time; // if positive, sunset did not happen yet, if negative, sunset happend and next is tomorrow
 	
-	if(print)
-		Serial.println(String{ "Sunset in : " } + sunset_in_s + "s");
+	if (print) {
+		if (sunset_in_s >= 0) {
+			Serial.println(String{ "Sunset in : " } + sunset_in_s + "s");
+		}
+		else {
+			Serial.println(String{ "Sunset happened " } + (-sunset_in_s) + "s ago");
+		}
+	}
+		
 	
 	if (now_time >= POWER_MIN_SEC && now_time <= POWER_MAX_SEC) return true;
 
-	if (sunset_in_s > 0) {
-		if (sunset_in_s <= SUNSET_WARN) {
+	if (sunset_in_s < SUNSET_WARN) {
+		if (SUNSET_WARN > 0) {
 			if (print)
-				Serial.println(String{"Warn of "} + SUNSET_WARN + "s happened");
-			return true;
-		}
-		else {
+				Serial.println(String{ "Warn of " } + SUNSET_WARN + "s before sunset happened");
+		}else {
 			if (print)
-				Serial.println(String{ "No Warn" });
-			return false;
+				Serial.println(String{ "Warn of " } + (-SUNSET_WARN + "s after sunset happened");
 		}
+		return true;
 	}
 	else { 
 		if (print)
-			Serial.println(String{ "Lights on phase, sunset already happened" });
-		return true;
+			Serial.println(String{ "No warn" });
+		return false;
 	}
 }
 
-String getApiSunrise() {
+time_safe getApiSunrise() {
 	HTTPClient client;
 	client.begin(String("http://") + api_sunrise_host + "/json?lat=" + latitude + "&lng=" + longitude + "&date=today");
 
@@ -229,10 +241,14 @@ String getApiSunrise() {
 	
 	String content;
 
+	time_safe t;
+	t.no_error = false;
+
 	if (httpCode > 0) {
 
 		if (httpCode == HTTP_CODE_OK) {
 			content = client.getString();
+			t.no_error = true;
 		}
 
 	}
@@ -241,11 +257,12 @@ String getApiSunrise() {
 	JsonObject &root = jsonBuffer.parseObject(content.c_str(), 10);
 
 	if (!root.success()) {
-		Serial.println("parseObject() failed");
+		t.no_error = false;
 	}
 
 	String sunset = root["results"]["sunset"];
+	t.result = parseTimeH24(sunset);
 
-	return sunset;
+	return t;
 
 }
