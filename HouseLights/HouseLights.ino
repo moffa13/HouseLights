@@ -80,8 +80,12 @@ void setup() {
 	bool connected{ false };
 	do {
 		connected = WifiUtils::connect(wifi_ssid, wifi_password, true, 15);
+		if (!connected) {
+			Serial.println("Could not connnect to WiFi, retrying.");
+		}
 	} while (!connected);
 	
+	Serial.println("Connected to WiFi.");
 
 	if (connected)digitalWrite(2, LOW); // Obvious
 
@@ -222,7 +226,7 @@ bool mustBeOn(time_si now, time_si sunset, bool print) {
 				Serial.println(String{ "Warn of " } + SUNSET_WARN + "s before sunset happened");
 		}else {
 			if (print)
-				Serial.println(String{ "Warn of " } + (-SUNSET_WARN + "s after sunset happened");
+				Serial.println(String{ "Warn of " } + (-SUNSET_WARN) + "s after sunset happened");
 		}
 		return true;
 	}
