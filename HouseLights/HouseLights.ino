@@ -12,6 +12,8 @@
 #define POWER_MIN_SEC 0
 #define POWER_MAX_SEC 4000
 #define UTC_OFFSET_HOUR 2
+#define RELAY_PIN 0
+#define LED_PIN 2
 
 const char* wifi_ssid = "***REMOVED***";
 const char* wifi_password = "***REMOVED***";
@@ -72,10 +74,10 @@ void setup() {
 
 	WiFi.setAutoReconnect(true);
 
-	pinMode(4, OUTPUT);
-	pinMode(2, OUTPUT);
-	digitalWrite(4, HIGH);
-	digitalWrite(2, HIGH);
+	pinMode(RELAY_PIN, OUTPUT);
+	pinMode(LED_PIN, OUTPUT);
+	digitalWrite(RELAY_PIN, HIGH);
+	digitalWrite(LED_PIN, HIGH);
 
 	WiFi.mode(WIFI_STA);
 
@@ -89,7 +91,7 @@ void setup() {
 
 void checkWiFi() {
 	if (WiFi.status() == WL_CONNECTED) return;
-	digitalWrite(2, HIGH);
+	digitalWrite(LED_PIN, HIGH);
 	bool connected{ false };
 	do {
 		connected = WifiUtils::connect(wifi_ssid, wifi_password, true, 15);
@@ -98,7 +100,7 @@ void checkWiFi() {
 		}
 	} while (!connected);
 
-	if (connected)digitalWrite(2, LOW); // Obvious
+	if (connected)digitalWrite(LED_PIN, LOW); // Obvious
 
 	Serial.println("Connected to WiFi.");
 }
@@ -136,10 +138,10 @@ void loop() {
 		if (parsedSunset.hour > 23) parsedSunset.hour = 24 - parsedSunset.hour;
 
 		if (lightsState == 1 || (lightsState == -1 && mustBeOn(now_time, parsedSunset, false))) {
-			digitalWrite(4, LOW);
+			digitalWrite(RELAY_PIN, LOW);
 		}
 		else {
-			digitalWrite(4, HIGH);
+			digitalWrite(RELAY_PIN, HIGH);
 		}
 
 		lastCheckTime = millis();
