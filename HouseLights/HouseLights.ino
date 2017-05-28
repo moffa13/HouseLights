@@ -70,6 +70,8 @@ void setup() {
 		;; // Wait for serial working
 	}
 
+	WiFi.setAutoReconnect(true);
+
 	pinMode(4, OUTPUT);
 	pinMode(2, OUTPUT);
 	digitalWrite(4, HIGH);
@@ -77,6 +79,17 @@ void setup() {
 
 	WiFi.mode(WIFI_STA);
 
+	checkWiFi();
+	
+	Serial.println("Connected to WiFi.");
+
+	Serial.println("Ready.");
+
+}
+
+void checkWiFi() {
+	if (WiFi.status() == WL_CONNECTED) return;
+	digitalWrite(2, HIGH);
 	bool connected{ false };
 	do {
 		connected = WifiUtils::connect(wifi_ssid, wifi_password, true, 15);
@@ -84,22 +97,20 @@ void setup() {
 			Serial.println("Could not connnect to WiFi, retrying.");
 		}
 	} while (!connected);
-	
-	Serial.println("Connected to WiFi.");
 
 	if (connected)digitalWrite(2, LOW); // Obvious
 
-	Serial.println("Ready.");
-
+	Serial.println("Connected to WiFi.");
 }
 
 String currentLine;
 
 void loop() {
 
-	if (millis() > lastCheckTime + loopRefreshInterval) {
-		
+	if (millis() > lastCheckTime + loopRefreshInterval || lastCheckTime == 0) {
 
+		checkWiFi();
+	
 		timeClient.update();
 		timeClient.setTimeOffset(UTC_OFFSET_HOUR * 60 * 60);
 
@@ -177,8 +188,16 @@ void loop() {
 
 }
 
+String IpAddress2String(const IPAddress& ipAddress){
+	return String(ipAddress[0]) + "." + \
+		ipAddress[1] + "." + \
+		ipAddress[2] + "." + \
+		ipAddress[3];
+}
+
 void printInfos() {
 	printWifiSignalStrength();
+	Serial.println("Module MAC is : " + WiFi.macAddress());
 	Serial.println(String{ "Current time : " } + timeClient.getFormattedTime());
 	Serial.println(String{ "Sunset is at : " } + parsedSunset.hour + ":" + parsedSunset.minute + ":" + parsedSunset.second);
 	if (lightsState != -1)
@@ -191,6 +210,7 @@ void printWifiSignalStrength() {
 		Serial.println("WiFi is connected");
 		int32_t rssi{ WiFi.RSSI() };
 		Serial.println(String{ "WiFi signal strength : " } + rssi + "dBm");
+		Serial.println("Local IP address is : " + IpAddress2String(WiFi.localIP()));
 	}
 	else {
 		Serial.println("No WiFi connection");
