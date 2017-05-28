@@ -82,8 +82,6 @@ void setup() {
 	WiFi.mode(WIFI_STA);
 
 	checkWiFi();
-	
-	Serial.println("Connected to WiFi.");
 
 	Serial.println("Ready.");
 
