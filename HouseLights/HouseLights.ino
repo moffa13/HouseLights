@@ -1,17 +1,21 @@
-#include <NTPClient.h>
-#include <TimeLib.h>
-#include <ESP8266HTTPClient.h>
-#include <ESP8266WiFi.h>
+﻿#include <NTPClient.h>
 #include <WiFiUdp.h>
-#include "WiFiUtils.h"
+#include <WiFiServer.h>
+#include <WiFiClientSecure.h>
 #include <WiFiClient.h>
+#include <ESP8266WiFiMulti.h>
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
 #include <ArduinoJson.h>
 #include "defs.h"
+#include "WifiUtils.h"
 
 #define SUNSET_WARN -600
 #define POWER_MIN_SEC 0
 #define POWER_MAX_SEC 4000
-#define UTC_OFFSET_HOUR 2
+#define USE_TIMEZONE_API
+#define GOOGLE_TIMEZONE_API_KEY "***REMOVED***"
+//#define UTC_OFFSET_HOUR 2
 #define RELAY_PIN 0
 #define LED_PIN 2
 
@@ -20,8 +24,9 @@ const char* wifi_password = "***REMOVED***";
 const char* api_sunrise_host = "api.sunrise-sunset.org";
 const char* latitude = "***REMOVED***";
 const char* longitude = "***REMOVED***";
+const char* google_api_fingerprint = "49 8C B4 68 C2 9D 4F 34 04 FA 04 41 B6 EF 1D 04 60 3B 09 79";
 unsigned long lastCheckTime = 0;
-unsigned int loopRefreshInterval = 60000;
+unsigned int loopRefreshInterval = 1200000;
 short lightsState = -1; // -1 auto, 0 off, 1 on
 bool autoDebug = false; // If true, auto shows printInfos method 
 
@@ -67,7 +72,7 @@ time_si parseTimeH24(String time) {
 
 void setup() {
 
-	Serial.begin(115200);
+	Serial.begin(9600);
 	while (!Serial) {
 		;; // Wait for serial working
 	}
@@ -112,7 +117,21 @@ void loop() {
 		checkWiFi();
 	
 		timeClient.update();
-		timeClient.setTimeOffset(UTC_OFFSET_HOUR * 60 * 60);
+
+		unsigned int timezone_offset = 0;
+
+#ifdef USE_TIMEZONE_API
+		timezone_offset = getTimezone();
+#else
+		timezone_offset = UTC_OFFSET_HOUR * 60 * 60;
+#endif
+
+		timeClient.setTimeOffset(timezone_offset);
+
+		if (autoDebug) {
+			Serial.println(String{ "Set Timezone to " } +timezone_offset + "s");
+		}
+		
 
 		now_time.hour = timeClient.getHours();
 		now_time.minute = timeClient.getMinutes();
@@ -124,7 +143,7 @@ void loop() {
 			if (autoDebug)
 				Serial.println("Successfully retrieved sunset hour");
 			parsedSunset = sunset.result;
-			parsedSunset.hour += UTC_OFFSET_HOUR; // UTC Belgium
+			parsedSunset.hour += timezone_offset / 3600; // half-hour timezone not supported
 		}
 		else {
 			Serial.println("Didn't retrieve sunset hour");
@@ -255,6 +274,60 @@ bool mustBeOn(time_si now, time_si sunset, bool print) {
 			Serial.println(String{ "No warn" });
 		return false;
 	}
+}
+
+unsigned int getTimezone() {
+	WiFiClientSecure client;
+
+	const char* host = "maps.googleapis.com";
+
+	if (!client.connect(host, 443)) {
+		Serial.println("Could connect to google api");
+		return 0;
+	}
+
+	if (!client.verify(google_api_fingerprint, "maps.googleapis.com")) {
+		Serial.println("Google api wrong fingerprint, refusing connection");
+		//return 0;
+	}
+
+	String url{ String{"/maps/api/timezone/json?location="} + latitude + "," + longitude + "&timestamp=" + timeClient.getEpochTime() + "&key=" + GOOGLE_TIMEZONE_API_KEY };
+
+
+	client.print(String("GET ") + url + " HTTP/1.1\r\n" +
+		"Host: " + host + "\r\n" +
+		"User-Agent: ESP8266\r\n" +
+		"Connection: close\r\n\r\n");
+
+	bool isContent{ false };
+
+	String line;
+
+	while (client.connected()) {
+		String tmp{ client.readStringUntil('\n') };
+		if (isContent) {
+			line += tmp;
+		}else if (tmp == "\r") {
+			isContent = true;
+		}
+	}
+	
+	StaticJsonBuffer<800> jsonBuffer;
+	JsonObject &root = jsonBuffer.parseObject(line.c_str(), 10);
+
+	if (autoDebug) {
+		Serial.println(line);
+	}
+
+	if (!root.success() || strcmp(root["status"], "OK") != 0) {
+		Serial.println("Error parsing Google api JSON");
+		return 0;
+	}
+	else if(autoDebug) {
+		Serial.println("Successfully received from Google Maps API");
+	}
+
+	return root["dstOffset"].as<unsigned int>() + root["rawOffset"].as<unsigned int>();
 }
 
 time_safe getApiSunrise() {
