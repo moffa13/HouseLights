@@ -10,19 +10,32 @@
 #include "defs.h"
 #include "WifiUtils.h"
 
+
+/* Time to set the lights on before the "official" sunset 
+	Set it to 0 to power on the lights exactly when the sunset happens
+*/
 #define SUNSET_WARN -600
+
+/* Interval where the lights are always on. 
+Normally, when we reach the next day, the sun is not supposed to be down
+so the lights shut off */
 #define POWER_MIN_SEC 0
+// Change this to tell for how many seconds the lights should keep being on after midnight
 #define POWER_MAX_SEC 4000
+
+// Comment this to set a manual timezone
 #define USE_TIMEZONE_API
-#define GOOGLE_TIMEZONE_API_KEY "AIzaSyC7dCZlUCtRjNcU2ifaZcDtfdwUSKn9HII"
+#define GOOGLE_TIMEZONE_API_KEY "YOUR_GOOGLE_TIMEZONE_API_KEY"
+
+// Change these parameters to fit with your hardware
 #define RELAY_PIN 0
 #define LED_PIN 2
 
-const char* wifi_ssid = "Mobistar-1B96F";
-const char* wifi_password = "QC49ns8Q";
-const char* api_sunrise_host = "api.sunrise-sunset.org";
-const char* latitude = "50.4685964";
-const char* longitude = "4.2602475";
+const char* const wifi_ssid = "YOUR_SSID";
+const char* const wifi_password = "YOUR_PASSWORD";
+const char* const latitude = "YOUR_LATITUDE";
+const char* const longitude = "YOUR_LONGITUDE";
+const char* const api_sunrise_host = "api.sunrise-sunset.org";
 unsigned int timezone_offset = 0;
 unsigned long lastCheckTime = 0;
 unsigned int loopRefreshInterval = 1200000;
@@ -320,7 +333,6 @@ bool mustBeOn(time_si const& now, time_si const& sunset, bool print) {
 			Serial.println(String{ "Sunset happened " } + (-sunset_in_s) + "s ago");
 		}
 	}
-		
 	
 	if (now_time >= POWER_MIN_SEC && now_time <= POWER_MAX_SEC) return true;
 
