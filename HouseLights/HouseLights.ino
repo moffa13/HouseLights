@@ -10,9 +10,8 @@
 #include "defs.h"
 #include "WifiUtils.h"
 
-
 /* Time to set the lights on before the "official" sunset 
-	Set it to 0 to power on the lights exactly when the sunset happens
+Set it to 0 to power on the lights exactly when the sunset happens
 */
 #define SUNSET_WARN -600
 
@@ -21,13 +20,16 @@ Normally, when we reach the next day, the sun is not supposed to be down
 so the lights shut off */
 #define POWER_MIN_SEC 0
 // Change this to tell for how many seconds the lights should keep being on after midnight
-#define POWER_MAX_SEC 4000
+#define POWER_MAX_SEC 5400 // 1:30 am
 
-// Comment this to set a manual timezone
+/* Comment this to set a manual timezone & set timezone_offset to whatever timezone used in your country
+Otherwise, set up a free Google Time Zone API here https://developers.google.com/maps/documentation/timezone/get-api-key
+and put the key in GOOGLE_TIMEZONE_API_KEY
+*/
 #define USE_TIMEZONE_API
 #define GOOGLE_TIMEZONE_API_KEY "YOUR_GOOGLE_TIMEZONE_API_KEY"
 
-// Change these parameters to fit with your hardware
+// Change these parameters to fit with your iot device
 #define RELAY_PIN 0
 #define LED_PIN 2
 
@@ -116,6 +118,10 @@ void setup() {
 	timeClient.setTimeOffset(timezone_offset);
 	timeClient.forceUpdate();
 
+	if (autoDebug) {
+		Serial.println(String{ "Set Timezone to " } +timezone_offset + "s");
+	}
+
 	Serial.println("Ready.");
 }
 
@@ -167,7 +173,6 @@ String http_call(String host, String url, ushort port = 0, bool ssl = true) {
 
 }
 
-
 void checkWiFi() {
 	if (WiFi.status() == WL_CONNECTED) return;
 	digitalWrite(LED_PIN, HIGH);
@@ -188,20 +193,15 @@ String currentLine;
 
 void loop() {
 
+	timeClient.update();
+	now_time.hour = timeClient.getHours();
+	now_time.minute = timeClient.getMinutes();
+	now_time.second = timeClient.getSeconds();
+
 	if (millis() > lastCheckTime + loopRefreshInterval || lastCheckTime == 0) {
 
 		checkWiFi();
-	
-		timeClient.update();
-
-		if (autoDebug) {
-			Serial.println(String{ "Set Timezone to " } + timezone_offset + "s");
-		}
 		
-		now_time.hour = timeClient.getHours();
-		now_time.minute = timeClient.getMinutes();
-		now_time.second = timeClient.getSeconds();
-
 		time_safe const sunset = getApiSunrise();
 
 		if (sunset.no_error) {
@@ -221,8 +221,7 @@ void loop() {
 			}
 
 			if (parsedSunset.hour > 23) parsedSunset.hour = parsedSunset.hour - 24;
-		}
-		else {
+		}else {
 			Serial.println("Didn't retrieve sunset hour");
 		}
 
@@ -244,7 +243,6 @@ void loop() {
 		Serial.readBytes(reinterpret_cast<uint8_t*>(buffer), static_cast<size_t>(Serial.available()));
 
 		currentLine += buffer;
-
 
 		if (currentLine.endsWith("\r")) {
 
