@@ -42,7 +42,6 @@ unsigned int loopRefreshInterval = 1200000;
 short lightsState = -1; // -1 auto, 0 off, 1 on
 bool autoDebug = false; // If true, auto shows printInfos method 
 
-
 time_si parsedSunset;
 time_si now_time;
 WiFiUDP ntpUDP;
@@ -271,8 +270,10 @@ void loop() {
 				autoDebug = true;
 			}else if (currentLine.startsWith("interval ")) {
 				loopRefreshInterval = atoi(currentLine.substring(9, currentLine.length()).c_str());
+			}else if (currentLine.startsWith("refresh")) {
+				lastCheckTime = 0;
 			}else {
-				Serial.println("Unknown command, available commands are : info, lights<-1, 0, 1>, debug<0,1>, interval <interval>");
+				Serial.println("Unknown command, available commands are : info, lights<-1, 0, 1>, debug<0,1>, interval <interval>, refresh");
 			}
 
 			currentLine = String{};
@@ -319,6 +320,14 @@ int getTimeSecond(time_si const& time) {
 	return time.hour * 60 * 60 + time.minute * 60 + time.second;
 }
 
+String getSecondToTime(unsigned int totalSeconds) {
+	const unsigned int hours{ totalSeconds / 3600 };
+	const uint8_t minutes{ static_cast<uint8_t>((totalSeconds - hours * 3600) / 60) };
+	const uint8_t seconds{ static_cast<uint8_t>(totalSeconds - hours * 3600 - minutes * 60) };
+
+	return String{ hours } + "h " + minutes + "min " + seconds + "sec";
+}
+
 bool mustBeOn(time_si const& now, time_si const& sunset, bool print) {
 
 	int sunset_time = getTimeSecond(sunset);
@@ -327,10 +336,10 @@ bool mustBeOn(time_si const& now, time_si const& sunset, bool print) {
 	
 	if (print) {
 		if (sunset_in_s >= 0) {
-			Serial.println(String{ "Sunset in : " } + sunset_in_s + "s");
+			Serial.println(String{ "Sunset in : " } + getSecondToTime(sunset_in_s));
 		}
 		else {
-			Serial.println(String{ "Sunset happened " } + (-sunset_in_s) + "s ago");
+			Serial.println(String{ "Sunset happened " } + getSecondToTime(-sunset_in_s) + " ago");
 		}
 	}
 	
@@ -339,10 +348,10 @@ bool mustBeOn(time_si const& now, time_si const& sunset, bool print) {
 	if (sunset_in_s < SUNSET_WARN) {
 		if (SUNSET_WARN > 0) {
 			if (print)
-				Serial.println(String{ "Warn of " } + SUNSET_WARN + "s before sunset happened");
+				Serial.println(String{ "Warn of " } + getSecondToTime(SUNSET_WARN) + " before sunset happened");
 		}else {
 			if (print)
-				Serial.println(String{ "Warn of " } + (-SUNSET_WARN) + "s after sunset happened");
+				Serial.println(String{ "Warn of " } + getSecondToTime(-SUNSET_WARN) + " after sunset happened");
 		}
 		return true;
 	}
