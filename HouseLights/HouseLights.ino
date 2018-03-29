@@ -41,6 +41,7 @@ const char* const api_sunrise_host = "api.sunrise-sunset.org";
 unsigned int timezone_offset = 0;
 unsigned long lastCheckTime = 0;
 unsigned int loopRefreshInterval = 1200000;
+bool sunset_ok = false;
 short lightsState = -1; // -1 auto, 0 off, 1 on
 bool autoDebug = false; // If true, auto shows printInfos method 
 
@@ -198,6 +199,7 @@ void loop() {
 	now_time.minute = timeClient.getMinutes();
 	now_time.second = timeClient.getSeconds();
 
+	// Check the new sunset every <loopRefreshInterval>ms
 	if (millis() > lastCheckTime + loopRefreshInterval || lastCheckTime == 0) {
 
 		checkWiFi();
@@ -205,6 +207,9 @@ void loop() {
 		time_safe const sunset = getApiSunrise();
 
 		if (sunset.no_error) {
+
+			sunset_ok = true;
+
 			if (autoDebug)
 				Serial.println("Successfully retrieved sunset hour");
 			parsedSunset = sunset.result;
@@ -221,6 +226,9 @@ void loop() {
 			}
 
 			if (parsedSunset.hour > 23) parsedSunset.hour = parsedSunset.hour - 24;
+
+			// Update last check time only if it succeeds
+			lastCheckTime = millis();
 		}else {
 			Serial.println("Didn't retrieve sunset hour");
 		}
@@ -228,16 +236,17 @@ void loop() {
 		if (autoDebug)
 			printInfos();
 
+	}
+
+	if (sunset_ok) {
 		if (lightsState == 1 || (lightsState == -1 && mustBeOn(now_time, parsedSunset, false))) {
 			digitalWrite(RELAY_PIN, LOW);
 		}
 		else {
 			digitalWrite(RELAY_PIN, HIGH);
 		}
-
-		lastCheckTime = millis();
 	}
-
+	
 	if (Serial.available() > 0) { // Wrote something
 		char* buffer = static_cast<char*>(malloc(Serial.available()));
 		Serial.readBytes(reinterpret_cast<uint8_t*>(buffer), static_cast<size_t>(Serial.available()));
