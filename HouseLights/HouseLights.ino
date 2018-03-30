@@ -41,8 +41,8 @@ const char* const api_sunrise_host = "api.sunrise-sunset.org";
 unsigned int timezone_offset = 0;
 unsigned long lastCheckTime = 0;
 unsigned int loopRefreshInterval = 1200000;
-bool sunset_ok = false;
 short lightsState = -1; // -1 auto, 0 off, 1 on
+bool sunset_ok = false;
 bool autoDebug = false; // If true, auto shows printInfos method 
 
 time_si parsedSunset;
@@ -112,16 +112,18 @@ void setup() {
 
 	timeClient.begin();
 
-#ifdef USE_TIMEZONE_API
+#ifdef USE_TIMEZONE_API	
+	bool successUpdate = false;
+	do {
+		successUpdate = timeClient.forceUpdate();
+	} while (!successUpdate);
+
 	timezone_offset = getTimezone();
 #endif
 
 	timeClient.setTimeOffset(timezone_offset);
-	timeClient.forceUpdate();
 
-	if (autoDebug) {
-		Serial.println(String{ "Set Timezone to " } +timezone_offset + "s");
-	}
+	Serial.println(String{ "Set Timezone to " } + timezone_offset + "s");
 
 	Serial.println("Ready.");
 }
