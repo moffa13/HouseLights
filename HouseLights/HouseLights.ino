@@ -38,7 +38,7 @@ const char* const wifi_password = "YOUR_PASSWORD";
 const char* const latitude = "YOUR_LATITUDE";
 const char* const longitude = "YOUR_LONGITUDE";
 const char* const api_sunrise_host = "api.sunrise-sunset.org";
-unsigned int timezone_offset = 0;
+int timezone_offset = 1;
 unsigned long lastCheckTime = 0;
 unsigned int loopRefreshInterval = 1200000;
 short lightsState = -1; // -1 auto, 0 off, 1 on
@@ -92,6 +92,27 @@ time_si parseTimeH24(String const& time) {
 	return t;
 }
 
+bool setTimezone() {
+#ifdef USE_TIMEZONE_API	
+	bool successUpdate = false;
+	int new_timezone_offset;
+	do {
+		checkWiFi();
+		successUpdate = timeClient.forceUpdate();
+		if (successUpdate)
+			new_timezone_offset = getTimezone();
+	} while (!successUpdate || new_timezone_offset == 1); // Retry if ntp did not update correctly or google timezone returned an error
+#endif
+	if (timezone_offset != new_timezone_offset) {
+		timeClient.setTimeOffset(new_timezone_offset);
+		Serial.println(String{ "Set Timezone to " } + new_timezone_offset + "s");
+		timezone_offset = new_timezone_offset;
+		return true;
+	}
+	else
+		return false;
+}
+
 void setup() {
 
 	Serial.begin(9600);
@@ -112,18 +133,7 @@ void setup() {
 
 	timeClient.begin();
 
-#ifdef USE_TIMEZONE_API	
-	bool successUpdate = false;
-	do {
-		successUpdate = timeClient.forceUpdate();
-	} while (!successUpdate);
-
-	timezone_offset = getTimezone();
-#endif
-
-	timeClient.setTimeOffset(timezone_offset);
-
-	Serial.println(String{ "Set Timezone to " } + timezone_offset + "s");
+	setTimezone();
 
 	Serial.println("Ready.");
 }
@@ -176,6 +186,8 @@ String http_call(String host, String url, ushort port = 0, bool ssl = true) {
 
 }
 
+// Returns only when connected to WiFi
+// Enable the LED_PIN when connected and disable it while connecting
 void checkWiFi() {
 	if (WiFi.status() == WL_CONNECTED) return;
 	digitalWrite(LED_PIN, HIGH);
@@ -187,24 +199,33 @@ void checkWiFi() {
 		}
 	} while (!connected);
 
-	if (connected)digitalWrite(LED_PIN, LOW); // Obvious
+	digitalWrite(LED_PIN, LOW); // Obvious
 
 	Serial.println("Connected to WiFi.");
+}
+
+void update_time_from_ntp() {
+	timeClient.update();
+	now_time.hour = timeClient.getHours();
+	now_time.minute = timeClient.getMinutes();
+	now_time.second = timeClient.getSeconds();
 }
 
 String currentLine;
 
 void loop() {
 
-	timeClient.update();
-	now_time.hour = timeClient.getHours();
-	now_time.minute = timeClient.getMinutes();
-	now_time.second = timeClient.getSeconds();
+	update_time_from_ntp();
 
 	// Check the new sunset every <loopRefreshInterval>ms
 	if (millis() > lastCheckTime + loopRefreshInterval || lastCheckTime == 0) {
 
 		checkWiFi();
+		
+		// If timezone's changed, update the time
+		if (setTimezone()) {
+			update_time_from_ntp();
+		}
 		
 		time_safe const sunset = getApiSunrise();
 
@@ -371,7 +392,7 @@ bool mustBeOn(time_si const& now, time_si const& sunset, bool print) {
 	}
 }
 
-unsigned int getTimezone() {
+int getTimezone() {
 
 	const char* host = "maps.googleapis.com";
 
@@ -388,13 +409,13 @@ unsigned int getTimezone() {
 
 	if (!root.success() || strcmp(root["status"], "OK") != 0) {
 		Serial.println("Error parsing Google api JSON");
-		return 0;
+		return 1;
 	}
 	else if(autoDebug) {
 		Serial.println("Successfully received from Google Maps API");
 	}
 
-	return root["dstOffset"].as<unsigned int>() + root["rawOffset"].as<unsigned int>();
+	return root["dstOffset"].as<int>() + root["rawOffset"].as<int>();
 }
 
 time_safe getApiSunrise() {
