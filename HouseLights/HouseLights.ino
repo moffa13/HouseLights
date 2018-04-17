@@ -33,22 +33,22 @@ and put the key in GOOGLE_TIMEZONE_API_KEY
 #define RELAY_PIN 0
 #define LED_PIN 2
 
-const char* const wifi_ssid = "YOUR_SSID";
-const char* const wifi_password = "YOUR_PASSWORD";
-const char* const latitude = "YOUR_LATITUDE";
-const char* const longitude = "YOUR_LONGITUDE";
-const char* const api_sunrise_host = "api.sunrise-sunset.org";
-int timezone_offset = 1;
-unsigned long lastCheckTime = 0;
-unsigned int loopRefreshInterval = 1200000;
-short lightsState = -1; // -1 auto, 0 off, 1 on
-bool sunset_ok = false;
-bool autoDebug = false; // If true, auto shows printInfos method 
+static const char* const wifi_ssid = "YOUR_SSID";
+static const char* const wifi_password = "YOUR_PASSWORD";
+static const char* const latitude = "YOUR_LATITUDE";
+static const char* const longitude = "YOUR_LONGITUDE";
+static const char* const api_sunrise_host = "api.sunrise-sunset.org";
+static int timezone_offset = 1; // Offset to apply from NTP's time, 1 is unset, correct offset is multiple of 3600
+static unsigned long lastCheckTime = 0;
+static unsigned int loopRefreshInterval = 1200000;
+static short lightsState = -1; // -1 auto, 0 off, 1 on
+static bool sunset_ok = false;
+static bool autoDebug = false; // If true, auto shows printInfos method 
 
-time_si parsedSunset;
-time_si now_time;
-WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP);
+static time_si parsedSunset;
+static time_si now_time;
+static WiFiUDP ntpUDP;
+static NTPClient timeClient(ntpUDP);
 
 bool mustBeOn(time_si const& now, time_si const& sunset, bool print = false);
 
@@ -94,14 +94,20 @@ time_si parseTimeH24(String const& time) {
 
 bool setTimezone() {
 #ifdef USE_TIMEZONE_API	
-	bool successUpdate = false;
-	int new_timezone_offset;
+	bool processOK;
+	int new_timezone_offset = 1;
 	do {
+		bool successUpdate;
 		checkWiFi();
 		successUpdate = timeClient.forceUpdate();
 		if (successUpdate)
 			new_timezone_offset = getTimezone();
-	} while (!successUpdate || new_timezone_offset == 1); // Retry if ntp did not update correctly or google timezone returned an error
+		processOK = successUpdate && new_timezone_offset != 1;
+		if (!processOK) {
+			Serial.println("Failed retrieving timezone, retrying in 1 second");
+			delay(1000);
+		}
+	} while (!processOK); // Retry if ntp did not update correctly or google timezone returned an error
 #endif
 	if (timezone_offset != new_timezone_offset) {
 		timeClient.setTimeOffset(new_timezone_offset);
@@ -109,8 +115,10 @@ bool setTimezone() {
 		timezone_offset = new_timezone_offset;
 		return true;
 	}
-	else
+	else {
+		Serial.println(String{ "Timezone did not change (" } +timezone_offset + "s)");
 		return false;
+	}
 }
 
 void setup() {
@@ -152,7 +160,7 @@ String http_call(String host, String url, ushort port = 0, bool ssl = true) {
 	ushort _port{ port == 0 ? (ssl ? 443 : 80) : port };
 
 	if (!client->connect(host.c_str(), _port)) {
-		Serial.println("Could connect to google api");
+		Serial.println(String{ "Could connect to host" } + host);
 		return "";
 	}
 
@@ -271,8 +279,10 @@ void loop() {
 	}
 	
 	if (Serial.available() > 0) { // Wrote something
-		char* buffer = static_cast<char*>(malloc(Serial.available()));
-		Serial.readBytes(reinterpret_cast<uint8_t*>(buffer), static_cast<size_t>(Serial.available()));
+		int serialToRead = Serial.available();
+		char* buffer = static_cast<char*>(malloc(serialToRead));
+		memset(buffer, '\0', serialToRead);
+		Serial.readBytes(reinterpret_cast<uint8_t*>(buffer), static_cast<size_t>(serialToRead));
 
 		currentLine += buffer;
 
@@ -302,8 +312,16 @@ void loop() {
 				loopRefreshInterval = atoi(currentLine.substring(9, currentLine.length()).c_str());
 			}else if (currentLine.startsWith("refresh")) {
 				lastCheckTime = 0;
+			}else if (currentLine.startsWith("rfshtmz")) {
+				setTimezone();
+			}
+			else if (currentLine.startsWith("reboot")) {
+				ESP.restart();
+			}
+			else if (currentLine.startsWith("coreinf")) {
+				debug_esp_infos();
 			}else {
-				Serial.println("Unknown command, available commands are : info, lights<-1, 0, 1>, debug<0,1>, interval <interval>, refresh");
+				Serial.println("Unknown command, available commands are : info, lights<-1, 0, 1>, debug<0,1>, interval <interval>, refresh, rfshtmz, coreinfo, reboot");
 			}
 
 			currentLine = String{};
@@ -314,6 +332,35 @@ void loop() {
 	
 	yield();
 
+}
+
+void debug_esp_infos() {
+	Serial.printf("ESP.getFreeHeap()              : %d\r\n", ESP.getFreeHeap());   //  returns the free heap size.
+	Serial.printf("ESP.getChipId()                : 0x%X\r\n", ESP.getChipId());   //  returns the ESP8266 chip ID as a 32-bit integer.
+	Serial.printf("ESP.getSdkVersion()            : %d\r\n", ESP.getSdkVersion());
+	Serial.printf("ESP.getBootVersion()           : %d\r\n", ESP.getBootVersion());
+	Serial.printf("ESP.getBootMode()              : %d\r\n", ESP.getBootMode());
+	Serial.printf("ESP.getCpuFreqMHz()            : %d\r\n", ESP.getCpuFreqMHz());
+	Serial.printf("ESP.getFlashChipId()           : 0x%X\r\n", ESP.getFlashChipId());
+	Serial.printf("ESP.getFlashChipRealSize()     : %d\r\n", ESP.getFlashChipRealSize());
+	Serial.printf("ESP.getFlashChipSize()         : %d\r\n", ESP.getFlashChipSize());  //returns the flash chip size, in bytes, as seen by the SDK (may be less than actual size).
+	Serial.printf("ESP.getFlashChipSpeed()        : %d\r\n", ESP.getFlashChipSpeed()); // returns the flash chip frequency, in Hz.
+	Serial.printf("ESP.getFlashChipMode()         : %d\r\n", ESP.getFlashChipMode());
+	Serial.printf("ESP.getFlashChipSizeByChipId() : 0x%X\r\n", ESP.getFlashChipSizeByChipId());
+	Serial.printf("ESP.getSketchSize()            : %d\r\n", ESP.getSketchSize());
+	Serial.printf("ESP.getFreeSketchSpace()       : %d\r\n", ESP.getFreeSketchSpace());
+	Serial.printf("ESP.getCycleCount()            : %d\r\n", ESP.getCycleCount()); // returns the cpu instruction cycle count since start as an unsigned 32-bit. This is useful for accurate timing of very short actions like bit banging.
+
+	rst_info *xyz;
+	Serial.printf("ESP.getResetInfoPtr()\r\n");
+	xyz = ESP.getResetInfoPtr();
+	Serial.println((*xyz).reason);
+	Serial.println((*xyz).exccause);
+	Serial.println((*xyz).epc1);
+	Serial.println((*xyz).epc2);
+	Serial.println((*xyz).epc3);
+	Serial.println((*xyz).excvaddr);
+	Serial.println((*xyz).depc);
 }
 
 String IpAddress2String(const IPAddress& ipAddress){
@@ -399,11 +446,12 @@ int getTimezone() {
 	String url{ String{"/maps/api/timezone/json?location="} + latitude + "," + longitude + "&timestamp=" + timeClient.getEpochTime() + "&key=" + GOOGLE_TIMEZONE_API_KEY };
 
 	String content{ http_call(host, url) };
-	
+
 	StaticJsonBuffer<800> jsonBuffer;
 	JsonObject &root = jsonBuffer.parseObject(content.c_str(), 10);
 
 	if (autoDebug) {
+		Serial.println(url);
 		Serial.println(content);
 	}
 
