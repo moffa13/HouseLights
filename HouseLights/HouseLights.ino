@@ -40,6 +40,7 @@ static const char* const longitude = "YOUR_LONGITUDE";
 static const char* const api_sunrise_host = "api.sunrise-sunset.org";
 static int timezone_offset = 1; // Offset to apply from NTP's time, 1 is unset, correct offset is multiple of 3600
 static unsigned long lastCheckTime = 0;
+static unsigned long lastTimezoneCheckTime = 0;
 static unsigned int loopRefreshInterval = 1200000;
 static short lightsState = -1; // -1 auto, 0 off, 1 on
 static bool sunset_ok = false;
@@ -93,31 +94,34 @@ time_si parseTimeH24(String const& time) {
 }
 
 bool setTimezone() {
+	if (millis() > lastTimezoneCheckTime + loopRefreshInterval || lastTimezoneCheckTime == 0) {
 #ifdef USE_TIMEZONE_API	
-	bool processOK;
-	int new_timezone_offset = 1;
-	do {
-		bool successUpdate;
-		checkWiFi();
-		successUpdate = timeClient.forceUpdate();
-		if (successUpdate)
-			new_timezone_offset = getTimezone();
-		processOK = successUpdate && new_timezone_offset != 1;
-		if (!processOK) {
-			Serial.println("Failed retrieving timezone, retrying in 1 second");
-			delay(1000);
-		}
-	} while (!processOK); // Retry if ntp did not update correctly or google timezone returned an error
+		bool processOK;
+		int new_timezone_offset = 1;
+		do {
+			bool successUpdate;
+			checkWiFi();
+			successUpdate = timeClient.forceUpdate();
+			if (successUpdate)
+				new_timezone_offset = getTimezone();
+			processOK = successUpdate && new_timezone_offset != 1;
+			if (!processOK) {
+				Serial.println("Failed retrieving timezone, retrying in 1 second");
+				delay(1000);
+			}
+		} while (!processOK); // Retry if ntp did not update correctly or google timezone returned an error
 #endif
-	if (timezone_offset != new_timezone_offset) {
-		timeClient.setTimeOffset(new_timezone_offset);
-		Serial.println(String{ "Set Timezone to " } + new_timezone_offset + "s");
-		timezone_offset = new_timezone_offset;
-		return true;
-	}
-	else {
-		Serial.println(String{ "Timezone did not change (" } +timezone_offset + "s)");
-		return false;
+		if (timezone_offset != new_timezone_offset) {
+			timeClient.setTimeOffset(new_timezone_offset);
+			Serial.println(String{ "Set Timezone to " } +new_timezone_offset + "s");
+			timezone_offset = new_timezone_offset;
+			return true;
+		}
+		else {
+			Serial.println(String{ "Timezone did not change (" } +timezone_offset + "s)");
+			return false;
+		}
+		lastTimezoneCheckTime = millis();
 	}
 }
 
