@@ -288,6 +288,7 @@ void registerApiServerRequests() {
 			}
 			else if (param_name == "google_api_key") {
 				updateGoogleApiKey(apiServer.arg("param_value").c_str());
+				lastTimezoneCheckTime = 0;
 			}
 			else {
 				error = true;
@@ -339,8 +340,15 @@ void registerApiServerRequests() {
 		apiServer.send(200, "text/html", coreinfos);
 	});
 
+	apiServer.on("/reboot", []() {
+		apiServer.send(200, "text/html", "REBOOTING...");
+		ESP.restart();
+	});
+
 	apiServer.on("/wipe", HTTPMethod::HTTP_DELETE, []() {
 		wipeMemory();
+		lastCheckTime = 0;
+		lastTimezoneCheckTime = 0;
 		apiServer.send(200, "text/html", "OK");
 	});
 }
@@ -597,7 +605,7 @@ void printInfos(bool toSerial, String *str) {
 	infos += String{ "Sunset is at : " } + parsedSunset.hour + ":" + parsedSunset.minute + ":" + parsedSunset.second + "\n";
 	infos += String{ "Warn defined to : " } + sunset_warn + "s" + "\n";
 	infos += String{ "Auto on between " } + power_min_sec + "s and " + power_max_sec + "s\n";
-	infos += String{ "API key is " } + google_api_key;
+	infos += String{ "API key is " } + google_api_key + "\n";
 	if (lightsState != -1)
 		infos += String{ "Warning : Lights are not set to automatic (" } + static_cast<int>(lightsState) + ") !\n";
 
