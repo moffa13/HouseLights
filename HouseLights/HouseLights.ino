@@ -1,4 +1,6 @@
-﻿#include <NTPClient.h>
+﻿#include <EEPROM.h>
+#include <ESP8266WebServer.h>
+#include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <WiFiServer.h>
 #include <WiFiClientSecure.h>
@@ -10,24 +12,11 @@
 #include "defs.h"
 #include "WifiUtils.h"
 
-/* Time to set the lights on before the "official" sunset 
-Set it to 0 to power on the lights exactly when the sunset happens
-*/
-#define SUNSET_WARN -600
-
-/* Interval where the lights are always on. 
-Normally, when we reach the next day, the sun is not supposed to be down
-so the lights shut off */
-#define POWER_MIN_SEC 0
-// Change this to tell for how many seconds the lights should keep being on after midnight
-#define POWER_MAX_SEC 5400 // 1:30 am
-
 /* Comment this to set a manual timezone & set timezone_offset to whatever timezone used in your country
 Otherwise, set up a free Google Time Zone API here https://developers.google.com/maps/documentation/timezone/get-api-key
-and put the key in GOOGLE_TIMEZONE_API_KEY
+and change the key of google_api_key
 */
 #define USE_TIMEZONE_API
-#define GOOGLE_TIMEZONE_API_KEY "YOUR_GOOGLE_TIMEZONE_API_KEY"
 
 // Change these parameters to fit with your iot device
 #define RELAY_PIN 0
@@ -46,10 +35,24 @@ static short lightsState = -1; // -1 auto, 0 off, 1 on
 static bool sunset_ok = false;
 static bool autoDebug = false; // If true, auto shows printInfos method 
 
+/* Interval where the lights are always on.
+Normally, when we reach the next day, the sun is not supposed to be down
+so the lights shut off */
+static unsigned int power_min_sec = 0;
+// Tell for how many seconds the lights should keep being on after midnight
+static unsigned int power_max_sec = 0;
+
+/* Time to set the lights on before the "official" sunset
+Set it to 0 to power on the lights exactly when the sunset happens
+*/
+static unsigned int sunset_warn = 0;
+static char * google_api_key;
+
 static time_si parsedSunset;
 static time_si now_time;
 static WiFiUDP ntpUDP;
 static NTPClient timeClient(ntpUDP);
+static ESP8266WebServer apiServer(8086);
 
 bool mustBeOn(time_si const& now, time_si const& sunset, bool print = false);
 
@@ -132,6 +135,11 @@ void setup() {
 		;; // Wait for serial working
 	}
 
+	EEPROM.begin(4096);
+
+	google_api_key = static_cast<char*>(malloc(40));
+	memset(google_api_key, 0, 40);
+
 	WiFi.setAutoReconnect(true);
 
 	pinMode(RELAY_PIN, OUTPUT);
@@ -147,7 +155,120 @@ void setup() {
 
 	setTimezone();
 
+	registerApiServerRequests();
+
+	apiServer.begin();
+
 	Serial.println("Ready.");
+}
+
+void readMemory() {
+	// power_min_sec 0 -> 31
+	// power_max_sec 32 -> 63
+	// sunset_warn 64 -> 95
+	// google_api_key 96 -> 134
+	EEPROM.get(0, power_min_sec);
+	EEPROM.get(32, power_max_sec);
+	EEPROM.get(64, sunset_warn);
+	for (uint16_t i = 0; i < 39; ++i) {
+		google_api_key[i] = EEPROM.read(96 + i);
+	}
+}
+
+void updatePowerMinSec(unsigned int value) {
+	if (value == power_min_sec) return;
+	power_min_sec = value;
+	EEPROM.put(0, power_min_sec);
+	EEPROM.commit();
+}
+
+void updatePowerMaxSec(unsigned int value) {
+	if (value == power_max_sec) return;
+	power_max_sec = value;
+	EEPROM.put(32, power_max_sec);
+	EEPROM.commit();
+}
+
+void updateSunsetWarn(unsigned int value) {
+	if (value == sunset_warn) return;
+	sunset_warn = value;
+	EEPROM.put(64, sunset_warn);
+	EEPROM.commit();
+}
+
+void updateGoogleApiKey(const char* const value) {
+	if (memcmp(value, google_api_key, 39) == 0) return;
+	for (uint16_t i = 0; i < 39; ++i) {
+		google_api_key[i] = value[i];
+		EEPROM.write(96 + i, value[i]);
+	}
+	EEPROM.commit();
+}
+
+void registerApiServerRequests() {
+
+	apiServer.onNotFound([]() {
+		apiServer.send(404, "text/html", "REQUEST DOES NOT EXIST");
+	});
+
+	apiServer.on("/set", HTTPMethod::HTTP_POST, []() {
+		bool error = false;
+		if (apiServer.hasArg("value")) {
+			uint8_t value = atoi(apiServer.arg("value").c_str());
+			switch (value) {
+			case -1:
+			case 0:
+			case 1:
+				break;
+			default:
+				error = true;
+			}
+			if (!error) {
+				lightsState = value;
+				lastCheckTime = 0;
+				apiServer.send(200, "text/html", "OK");
+			}
+			else {
+				apiServer.send(400, "text/html", "ERROR");
+			}
+		}
+	});
+
+	apiServer.on("/get", []() {
+		apiServer.send(200, "text/html", String(lightsState));
+	});
+
+	apiServer.on("/param/set", HTTPMethod::HTTP_POST, []() {
+		bool error = false;
+		if (apiServer.hasArg("param_name") && apiServer.hasArg("param_value")) {
+			String param_name = apiServer.arg("param_name");
+			if (param_name == "power_min") {
+				updatePowerMinSec(atoi(apiServer.arg("param_value").c_str()));
+			}
+			else if (param_name == "power_max") {
+				updatePowerMaxSec(atoi(apiServer.arg("param_value").c_str()));
+			}
+			else if (param_name == "sunset_warn") {
+				updateSunsetWarn(atoi(apiServer.arg("param_value").c_str()));
+			}
+			else if (param_name == "google_api_key") {
+				updateGoogleApiKey(apiServer.arg("param_value").c_str());
+			}
+			else {
+				error = true;
+			}
+		}
+		else {
+			error = true;
+		}
+
+		if (!error) {
+			apiServer.send(200, "text/html", "OK");
+		}
+		else {
+			apiServer.send(400, "text/html", "ERROR");
+		}
+	});
 }
 
 String http_call(String host, String url, ushort port = 0, bool ssl = true) {
@@ -333,7 +454,9 @@ void loop() {
 		Serial.print(buffer);
 		free(buffer);
 	}
-	
+
+	apiServer.handleClient();
+
 	yield();
 
 }
@@ -424,15 +547,15 @@ bool mustBeOn(time_si const& now, time_si const& sunset, bool print) {
 		}
 	}
 	
-	if (now_time >= POWER_MIN_SEC && now_time <= POWER_MAX_SEC) return true;
+	if (now_time >= power_min_sec && now_time <= power_max_sec) return true;
 
-	if (sunset_in_s < SUNSET_WARN) {
-		if (SUNSET_WARN > 0) {
+	if (sunset_in_s < sunset_warn) {
+		if (sunset_warn > 0) {
 			if (print)
-				Serial.println(String{ "Warn of " } + getSecondToTime(SUNSET_WARN) + " before sunset happened");
+				Serial.println(String{ "Warn of " } + getSecondToTime(sunset_warn) + " before sunset happened");
 		}else {
 			if (print)
-				Serial.println(String{ "Warn of " } + getSecondToTime(-SUNSET_WARN) + " after sunset happened");
+				Serial.println(String{ "Warn of " } + getSecondToTime(-sunset_warn) + " after sunset happened");
 		}
 		return true;
 	}
@@ -447,7 +570,7 @@ int getTimezone() {
 
 	const char* host = "maps.googleapis.com";
 
-	String url{ String{"/maps/api/timezone/json?location="} + latitude + "," + longitude + "&timestamp=" + timeClient.getEpochTime() + "&key=" + GOOGLE_TIMEZONE_API_KEY };
+	String url{ String{"/maps/api/timezone/json?location="} + latitude + "," + longitude + "&timestamp=" + timeClient.getEpochTime() + "&key=" + google_api_key };
 
 	String content{ http_call(host, url) };
 
