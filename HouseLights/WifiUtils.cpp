@@ -11,9 +11,13 @@ namespace WifiUtils {
 	unsigned long lastTimeConnection = 0;
 	unsigned lastTimeout = 0;
 
-	bool connect(String essid, String password, bool blocking, unsigned timeout) {
+	bool connect(String essid, String password, bool blocking, unsigned timeout, IPAddress const * const ip, IPAddress const * const gateway, IPAddress const * const subnet) {
 		lastTimeConnection = millis();
 		lastTimeout = timeout;
+		if (ip != nullptr) {
+			WiFi.config(*ip, *gateway, *subnet);
+		}
+			
 		WiFi.begin(essid.c_str(), password.c_str());
 		if (blocking) {
 			while (true) {

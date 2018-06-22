@@ -1,4 +1,5 @@
-﻿#include <EEPROM.h>
+﻿#include <ESP8266WiFi.h>
+#include <EEPROM.h>
 #include <ESP8266WebServer.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
@@ -6,7 +7,6 @@
 #include <WiFiClientSecure.h>
 #include <WiFiClient.h>
 #include <ESP8266WiFiMulti.h>
-#include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 #include <ArduinoJson.h>
 #include "defs.h"
@@ -17,6 +17,7 @@ Otherwise, set up a free Google Time Zone API here https://developers.google.com
 and change the key of google_api_key
 */
 #define USE_TIMEZONE_API
+static int timezone_offset = 1; // Offset to apply from NTP's time, 1 is unset, correct offset is multiple of 3600
 
 // Change these parameters to fit with your iot device
 #define RELAY_PIN 0
@@ -27,10 +28,12 @@ static const char* const wifi_password = "YOUR_PASSWORD";
 static const char* const latitude = "YOUR_LATITUDE";
 static const char* const longitude = "YOUR_LONGITUDE";
 static const char* const api_sunrise_host = "api.sunrise-sunset.org";
-static int timezone_offset = 1; // Offset to apply from NTP's time, 1 is unset, correct offset is multiple of 3600
+
 static unsigned long lastCheckTime = 0;
 static unsigned long lastTimezoneCheckTime = 0;
 static unsigned int loopRefreshInterval = 1200000;
+static const uint16_t max_google_timezone_retries = 5;
+static uint16_t google_timezone_retries = 0;
 static short lightsState = -1; // -1 auto, 0 off, 1 on
 static bool sunset_ok = false;
 static bool autoDebug = false; // If true, auto shows printInfos method 
@@ -52,9 +55,16 @@ static time_si parsedSunset;
 static time_si now_time;
 static WiFiUDP ntpUDP;
 static NTPClient timeClient(ntpUDP);
+
+/* Change these infos to fit your needs*/
+static const IPAddress localIP(192, 168, 0, 227);
+static const IPAddress gateway(192, 168, 0, 1);
+static const IPAddress subnet(255, 255, 255, 0);
 static ESP8266WebServer apiServer(8086);
 
-bool mustBeOn(time_si const& now, time_si const& sunset, bool print = false);
+bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String *str = nullptr);
+void printWifiSignalStrength(String *str = nullptr);
+void printInfos(bool toSerial = true, String *str = nullptr);
 
 double fmod(double x, double y) {
 	return x - y * floor(x / y);
@@ -97,34 +107,44 @@ time_si parseTimeH24(String const& time) {
 }
 
 bool setTimezone() {
-	if (millis() > lastTimezoneCheckTime + loopRefreshInterval || lastTimezoneCheckTime == 0) {
+	if (google_api_key[0] != 0 && millis() > lastTimezoneCheckTime + loopRefreshInterval || lastTimezoneCheckTime == 0) {
 #ifdef USE_TIMEZONE_API	
 		bool processOK;
-		int new_timezone_offset = 1;
+		google_timezone_result timezone_result;
 		do {
 			bool successUpdate;
 			checkWiFi();
 			successUpdate = timeClient.forceUpdate();
-			if (successUpdate)
-				new_timezone_offset = getTimezone();
-			processOK = successUpdate && new_timezone_offset != 1;
+			
+			if (successUpdate) {
+				timezone_result = getTimezone();
+			}
+			processOK = successUpdate && timezone_result.error == false;
 			if (!processOK) {
+				if(timezone_result.error)
+					google_timezone_retries++;
 				Serial.println("Failed retrieving timezone, retrying in 1 second");
 				delay(1000);
 			}
-		} while (!processOK); // Retry if ntp did not update correctly or google timezone returned an error
+		} while (!processOK && google_timezone_retries != max_google_timezone_retries); // Retry if ntp did not update correctly or google timezone returned an error
 #endif
-		if (timezone_offset != new_timezone_offset) {
-			timeClient.setTimeOffset(new_timezone_offset);
-			Serial.println(String{ "Set Timezone to " } +new_timezone_offset + "s");
-			timezone_offset = new_timezone_offset;
-			return true;
+		if (google_timezone_retries != max_google_timezone_retries) {
+			if (timezone_offset != timezone_result.timezone) {
+				timeClient.setTimeOffset(timezone_result.timezone);
+				Serial.println(String{ "Set Timezone to " } + timezone_result.timezone + "s");
+				timezone_offset = timezone_result.timezone;
+				return true;
+			}
+			else {
+				Serial.println(String{ "Timezone did not change (" } +timezone_offset + "s)");
+				return false;
+			}
 		}
-		else {
-			Serial.println(String{ "Timezone did not change (" } +timezone_offset + "s)");
-			return false;
-		}
+		google_timezone_retries = 0;
 		lastTimezoneCheckTime = millis();
+	}
+	else if (google_api_key[0] == 0) {
+		Serial.println("Warning, google_api_key not set");
 	}
 }
 
@@ -139,6 +159,8 @@ void setup() {
 
 	google_api_key = static_cast<char*>(malloc(40));
 	memset(google_api_key, 0, 40);
+
+	readMemory();
 
 	WiFi.setAutoReconnect(true);
 
@@ -173,6 +195,16 @@ void readMemory() {
 	for (uint16_t i = 0; i < 39; ++i) {
 		google_api_key[i] = EEPROM.read(96 + i);
 	}
+}
+
+void wipeMemory() {
+	power_min_sec = 0;
+	power_max_sec = 0;
+	sunset_warn = 0;
+	memset(google_api_key, 0, 40);
+	for (uint16_t i = 0; i < 135; ++i)
+		EEPROM.write(i, 0);
+	EEPROM.commit();
 }
 
 void updatePowerMinSec(unsigned int value) {
@@ -214,7 +246,7 @@ void registerApiServerRequests() {
 	apiServer.on("/set", HTTPMethod::HTTP_POST, []() {
 		bool error = false;
 		if (apiServer.hasArg("value")) {
-			uint8_t value = atoi(apiServer.arg("value").c_str());
+			int8_t value = atoi(apiServer.arg("value").c_str());
 			switch (value) {
 			case -1:
 			case 0:
@@ -229,8 +261,11 @@ void registerApiServerRequests() {
 				apiServer.send(200, "text/html", "OK");
 			}
 			else {
-				apiServer.send(400, "text/html", "ERROR");
+				apiServer.send(400, "text/html", "ERROR BAD VALUE PROVIDED");
 			}
+		}
+		else {
+			apiServer.send(400, "text/html", "ERROR NO VALUE PROVIDED");
 		}
 	});
 
@@ -241,7 +276,7 @@ void registerApiServerRequests() {
 	apiServer.on("/param/set", HTTPMethod::HTTP_POST, []() {
 		bool error = false;
 		if (apiServer.hasArg("param_name") && apiServer.hasArg("param_value")) {
-			String param_name = apiServer.arg("param_name");
+			String const param_name = apiServer.arg("param_name");
 			if (param_name == "power_min") {
 				updatePowerMinSec(atoi(apiServer.arg("param_value").c_str()));
 			}
@@ -266,8 +301,47 @@ void registerApiServerRequests() {
 			apiServer.send(200, "text/html", "OK");
 		}
 		else {
+			apiServer.send(400, "text/html", "ERROR BAD PARAM NAME PROVIDED");
+		}
+	});
+
+	apiServer.on("/param/get", []() {
+		bool error = false;
+		if (apiServer.hasArg("param_name")) {
+			String const param_name = apiServer.arg("param_name");
+			if (param_name == "power_min") {
+				apiServer.send(200, "text/html", String(power_min_sec));
+			}
+			else if (param_name == "power_max") {
+				apiServer.send(200, "text/html", String(power_max_sec));
+			}
+			else if (param_name == "sunset_warn") {
+				apiServer.send(200, "text/html", String(sunset_warn));
+			}
+			else if (param_name == "google_api_key") {
+				apiServer.send(200, "text/html", google_api_key);
+			}
+			else {
+				error = true;
+			}
+			if (error) {
+				apiServer.send(400, "text/html", "ERROR UNKNOWN PARAMETER");
+			}
+		}
+		else {
 			apiServer.send(400, "text/html", "ERROR");
 		}
+	});
+
+	apiServer.on("/infos", []() {
+		String coreinfos;
+		printInfos(false, &coreinfos);
+		apiServer.send(200, "text/html", coreinfos);
+	});
+
+	apiServer.on("/wipe", HTTPMethod::HTTP_DELETE, []() {
+		wipeMemory();
+		apiServer.send(200, "text/html", "OK");
 	});
 }
 
@@ -326,7 +400,7 @@ void checkWiFi() {
 	digitalWrite(LED_PIN, HIGH);
 	bool connected{ false };
 	do {
-		connected = WifiUtils::connect(wifi_ssid, wifi_password, true, 15);
+		connected = WifiUtils::connect(wifi_ssid, wifi_password, true, 15, &localIP, &gateway, &subnet);
 		if (!connected) {
 			Serial.println("Could not connnect to WiFi, retrying.");
 		}
@@ -497,27 +571,44 @@ String IpAddress2String(const IPAddress& ipAddress){
 		ipAddress[3];
 }
 
-void printInfos() {
-	printWifiSignalStrength();
-	Serial.println("Module MAC is : " + WiFi.macAddress());
-	Serial.println(String{ "Timezone : " } + timezone_offset + "s");
-	Serial.println(String{ "Current time : " } + timeClient.getFormattedTime());
-	Serial.println(String{ "Sunset is at : " } + parsedSunset.hour + ":" + parsedSunset.minute + ":" + parsedSunset.second);
-	if (lightsState != -1)
-		Serial.println(String{ "Warning : Lights are not set to automatic (" } + static_cast<int>(lightsState) + ") !" );
-	mustBeOn(now_time, parsedSunset, true);
-}
-
-void printWifiSignalStrength() {
+void printWifiSignalStrength(String *str) {
+	String infos;
 	if (WiFi.status() == WL_CONNECTED) {
-		Serial.println("WiFi is connected");
+		infos += "WiFi is connected\n";
 		int32_t rssi{ WiFi.RSSI() };
-		Serial.println(String{ "WiFi signal strength : " } + rssi + "dBm");
-		Serial.println("Local IP address is : " + IpAddress2String(WiFi.localIP()));
+		infos += String("WiFi signal strength : ") + rssi + "dBm\n";
+		infos += String("Local IP address is : ") + IpAddress2String(WiFi.localIP()) + "\n";
 	}
 	else {
-		Serial.println("No WiFi connection");
+		infos += "No WiFi connection";
 	}
+
+	if (str != nullptr) {
+		(*str) += infos;
+	}
+}
+
+void printInfos(bool toSerial, String *str) {
+	String infos;
+	printWifiSignalStrength(&infos);
+	infos += "Module MAC is : " + WiFi.macAddress() + "\n";
+	infos += String{ "Timezone : " } + timezone_offset + "s\n";
+	infos += String{ "Current time : " } + timeClient.getFormattedTime() + "\n";
+	infos += String{ "Sunset is at : " } + parsedSunset.hour + ":" + parsedSunset.minute + ":" + parsedSunset.second + "\n";
+	infos += String{ "Warn defined to : " } + sunset_warn + "s" + "\n";
+	infos += String{ "Auto on between " } + power_min_sec + "s and " + power_max_sec + "s\n";
+	infos += String{ "API key is " } + google_api_key;
+	if (lightsState != -1)
+		infos += String{ "Warning : Lights are not set to automatic (" } + static_cast<int>(lightsState) + ") !\n";
+
+	mustBeOn(now_time, parsedSunset, true, &infos);
+	if (toSerial) {
+		Serial.println(infos);
+	}
+	else if (str != nullptr) {
+		(*str) += infos;
+	}
+	
 }
 
 int getTimeSecond(time_si const& time) {
@@ -532,18 +623,19 @@ String getSecondToTime(unsigned int totalSeconds) {
 	return String{ hours } + "h " + minutes + "min " + seconds + "sec";
 }
 
-bool mustBeOn(time_si const& now, time_si const& sunset, bool print) {
+bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String *str) {
 
 	int sunset_time = getTimeSecond(sunset);
 	int now_time = getTimeSecond(now);
 	int sunset_in_s = sunset_time - now_time; // if positive, sunset did not happen yet, if negative, sunset happend and next is tomorrow
+	String infos;
 	
 	if (print) {
 		if (sunset_in_s >= 0) {
-			Serial.println(String{ "Sunset in : " } + getSecondToTime(sunset_in_s));
+			infos += String{ "Sunset in : " } + getSecondToTime(sunset_in_s) + "\n";
 		}
 		else {
-			Serial.println(String{ "Sunset happened " } + getSecondToTime(-sunset_in_s) + " ago");
+			infos += String{ "Sunset happened " } + getSecondToTime(-sunset_in_s) + " ago\n";
 		}
 	}
 	
@@ -552,21 +644,38 @@ bool mustBeOn(time_si const& now, time_si const& sunset, bool print) {
 	if (sunset_in_s < sunset_warn) {
 		if (sunset_warn > 0) {
 			if (print)
-				Serial.println(String{ "Warn of " } + getSecondToTime(sunset_warn) + " before sunset happened");
+				infos += String{ "Warn of " } + getSecondToTime(sunset_warn) + " before sunset happened\n";
 		}else {
 			if (print)
-				Serial.println(String{ "Warn of " } + getSecondToTime(-sunset_warn) + " after sunset happened");
+				infos += String{ "Warn of " } + getSecondToTime(-sunset_warn) + " after sunset happened\n";
+		}
+		if (print) {
+			if (str != nullptr) {
+				(*str) += infos;
+			}
+			else {
+				Serial.println(infos);
+			}
 		}
 		return true;
 	}
 	else { 
-		if (print)
-			Serial.println(String{ "No warn" });
+		if (print) {
+			infos += "No Warn\n";
+			if (str != nullptr) {
+				(*str) += infos;
+			}
+			else {
+				Serial.println(infos);
+			}
+		}
 		return false;
 	}
 }
 
-int getTimezone() {
+google_timezone_result getTimezone() {
+
+	google_timezone_result res{ false, 0, 1 };
 
 	const char* host = "maps.googleapis.com";
 
@@ -584,13 +693,35 @@ int getTimezone() {
 
 	if (!root.success() || strcmp(root["status"], "OK") != 0) {
 		Serial.println("Error parsing Google api JSON");
-		return 1;
+		Serial.println(root["status"].as<String>());
+		res.error = true;
+		if (root["status"] == "INVALID_REQUEST") {
+			res.error_type = 1;
+		}
+		else if (root["status"] == "OVER_DAILY_LIMIT") {
+			res.error_type = 2;
+		}
+		else if (root["status"] == "OVER_QUERY_LIMIT") {
+			res.error_type = 3;
+		}
+		else if (root["status"] == "REQUEST_DENIED") {
+			res.error_type = 4;
+		}
+		else if (root["status"] == "UNKNOWN_ERROR") {
+			res.error_type = 5;
+		}
+		else if (root["status"] == "ZERO_RESULTS") {
+			res.error_type = 6;
+		}
+		
 	}
 	else if(autoDebug) {
 		Serial.println("Successfully received from Google Maps API");
 	}
 
-	return root["dstOffset"].as<int>() + root["rawOffset"].as<int>();
+	res.timezone = root["dstOffset"].as<int>() + root["rawOffset"].as<int>();
+
+	return res;
 }
 
 time_safe getApiSunrise() {

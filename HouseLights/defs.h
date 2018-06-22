@@ -10,6 +10,12 @@ typedef struct {
 	time_si result;
 } time_safe;
 
+typedef struct {
+	boolean error;
+	int error_type;
+	int timezone;
+} google_timezone_result;
+
 struct rst_info {
 	uint32 reason;
 	uint32 exccause;
