@@ -23,10 +23,10 @@ static int timezone_offset = 1; // Offset to apply from NTP's time, 1 is unset, 
 #define RELAY_PIN 0
 #define LED_PIN 2
 
-static const char* const wifi_ssid = "YOUR_SSID";
-static const char* const wifi_password = "YOUR_PASSWORD";
-static const char* const latitude = "YOUR_LATITUDE";
-static const char* const longitude = "YOUR_LONGITUDE";
+static const char* const wifi_ssid = "Mobistar-1B96F";
+static const char* const wifi_password = "QC49ns8Q";
+static const char* const latitude = "50.4685964";
+static const char* const longitude = "4.2602475";
 static const char* const api_sunrise_host = "api.sunrise-sunset.org";
 
 static unsigned long lastCheckTime = 0;
@@ -57,10 +57,11 @@ static WiFiUDP ntpUDP;
 static NTPClient timeClient(ntpUDP);
 
 /* Change these infos to fit your needs*/
-static const IPAddress localIP(192, 168, 0, 227);
+static const IPAddress dns(8, 8, 8, 8);
+static const IPAddress localIP(192, 168, 0, 127);
 static const IPAddress gateway(192, 168, 0, 1);
 static const IPAddress subnet(255, 255, 255, 0);
-static ESP8266WebServer apiServer(8086);
+static ESP8266WebServer apiServer(8087);
 
 bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String *str = nullptr);
 void printWifiSignalStrength(String *str = nullptr);
@@ -367,7 +368,7 @@ String http_call(String host, String url, ushort port = 0, bool ssl = true) {
 	ushort _port{ port == 0 ? (ssl ? 443 : 80) : port };
 
 	if (!client->connect(host.c_str(), _port)) {
-		Serial.println(String{ "Could connect to host" } + host);
+		Serial.println(String{ "Could not connect to host" } + host);
 		return "";
 	}
 
@@ -408,7 +409,7 @@ void checkWiFi() {
 	digitalWrite(LED_PIN, HIGH);
 	bool connected{ false };
 	do {
-		connected = WifiUtils::connect(wifi_ssid, wifi_password, true, 15, &localIP, &gateway, &subnet);
+		connected = WifiUtils::connect(wifi_ssid, wifi_password, true, 15, &localIP, &gateway, &subnet, &dns);
 		if (!connected) {
 			Serial.println("Could not connnect to WiFi, retrying.");
 		}
