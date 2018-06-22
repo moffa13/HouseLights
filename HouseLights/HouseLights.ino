@@ -23,10 +23,10 @@ static int timezone_offset = 1; // Offset to apply from NTP's time, 1 is unset, 
 #define RELAY_PIN 0
 #define LED_PIN 2
 
-static const char* const wifi_ssid = "Mobistar-1B96F";
-static const char* const wifi_password = "QC49ns8Q";
-static const char* const latitude = "50.4685964";
-static const char* const longitude = "4.2602475";
+static const char* const wifi_ssid = "YOUR_SSID";
+static const char* const wifi_password = "YOUR_PASSWORD";
+static const char* const latitude = "YOUR_LATITUDE";
+static const char* const longitude = "YOUR_LONGITUDE";
 static const char* const api_sunrise_host = "api.sunrise-sunset.org";
 
 static unsigned long lastCheckTime = 0;
@@ -48,7 +48,7 @@ static unsigned int power_max_sec = 0;
 /* Time to set the lights on before the "official" sunset
 Set it to 0 to power on the lights exactly when the sunset happens
 */
-static unsigned int sunset_warn = 0;
+static int sunset_warn = 0;
 static char * google_api_key;
 
 static time_si parsedSunset;
@@ -58,10 +58,10 @@ static NTPClient timeClient(ntpUDP);
 
 /* Change these infos to fit your needs*/
 static const IPAddress dns(8, 8, 8, 8);
-static const IPAddress localIP(192, 168, 0, 127);
+static const IPAddress localIP(192, 168, 0, 227);
 static const IPAddress gateway(192, 168, 0, 1);
 static const IPAddress subnet(255, 255, 255, 0);
-static ESP8266WebServer apiServer(8087);
+static ESP8266WebServer apiServer(8086);
 
 bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String *str = nullptr);
 void printWifiSignalStrength(String *str = nullptr);
@@ -222,7 +222,7 @@ void updatePowerMaxSec(unsigned int value) {
 	EEPROM.commit();
 }
 
-void updateSunsetWarn(unsigned int value) {
+void updateSunsetWarn(int value) {
 	if (value == sunset_warn) return;
 	sunset_warn = value;
 	EEPROM.put(64, sunset_warn);
@@ -343,6 +343,7 @@ void registerApiServerRequests() {
 
 	apiServer.on("/reboot", []() {
 		apiServer.send(200, "text/html", "REBOOTING...");
+		delay(1000);
 		ESP.restart();
 	});
 
@@ -477,7 +478,9 @@ void loop() {
 
 	}
 
-	if (sunset_ok) {
+	apiServer.handleClient();
+
+	if (sunset_ok || lightsState != -1) {
 		if (lightsState == 1 || (lightsState == -1 && mustBeOn(now_time, parsedSunset, false))) {
 			digitalWrite(RELAY_PIN, LOW);
 		}
@@ -537,8 +540,6 @@ void loop() {
 		Serial.print(buffer);
 		free(buffer);
 	}
-
-	apiServer.handleClient();
 
 	yield();
 
