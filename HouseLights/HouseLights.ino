@@ -31,7 +31,7 @@ static const char* const api_sunrise_host = "api.sunrise-sunset.org";
 
 static unsigned long lastCheckTime = 0;
 static unsigned long lastTimezoneCheckTime = 0;
-static unsigned int loopRefreshInterval = 1200000;
+static unsigned int loopRefreshInterval = 3'600'000;
 static const uint16_t max_google_timezone_retries = 5;
 static uint16_t google_timezone_retries = 0;
 static short lightsState = -1; // -1 auto, 0 off, 1 on
@@ -258,7 +258,7 @@ void registerApiServerRequests() {
 			}
 			if (!error) {
 				lightsState = value;
-				lastCheckTime = 0;
+				updateLightsState();
 				apiServer.send(200, "text/html", "OK");
 			}
 			else {
@@ -347,6 +347,21 @@ void registerApiServerRequests() {
 		ESP.restart();
 	});
 
+	apiServer.on("/refresh", []() {
+		lastCheckTime = 0;
+		apiServer.send(200, "text/html", "refreshed sunset check...");
+	});
+
+	apiServer.on("/reset_timezone", []() {
+		lastTimezoneCheckTime = 0;
+		apiServer.send(200, "text/html", "refreshed timezone check...");
+	});
+
+	apiServer.on("/refresh_all", []() {
+		lastTimezoneCheckTime = 0;
+		apiServer.send(200, "text/html", "refreshed timezone & sunset check...");
+	});
+
 	apiServer.on("/wipe", HTTPMethod::HTTP_DELETE, []() {
 		wipeMemory();
 		lastCheckTime = 0;
@@ -406,7 +421,7 @@ String http_call(String host, String url, ushort port = 0, bool ssl = true) {
 // Returns only when connected to WiFi
 // Enable the LED_PIN when connected and disable it while connecting
 void checkWiFi() {
-	if (WiFi.status() == WL_CONNECTED) return;
+	if (WifiUtils::isWifiConnected()) return;
 	digitalWrite(LED_PIN, HIGH);
 	bool connected{ false };
 	do {
@@ -480,14 +495,7 @@ void loop() {
 
 	apiServer.handleClient();
 
-	if (sunset_ok || lightsState != -1) {
-		if (lightsState == 1 || (lightsState == -1 && mustBeOn(now_time, parsedSunset, false))) {
-			digitalWrite(RELAY_PIN, LOW);
-		}
-		else {
-			digitalWrite(RELAY_PIN, HIGH);
-		}
-	}
+	updateLightsState();
 	
 	if (Serial.available() > 0) { // Wrote something
 		int serialToRead = Serial.available();
@@ -544,6 +552,18 @@ void loop() {
 	yield();
 
 }
+
+void updateLightsState() {
+	if (sunset_ok || lightsState != -1) {
+		if (lightsState == 1 || (lightsState == -1 && mustBeOn(now_time, parsedSunset, false))) {
+			digitalWrite(RELAY_PIN, LOW);
+		}
+		else {
+			digitalWrite(RELAY_PIN, HIGH);
+		}
+	}
+}
+
 
 void debug_esp_infos() {
 	Serial.printf("ESP.getFreeHeap()              : %d\r\n", ESP.getFreeHeap());   //  returns the free heap size.
