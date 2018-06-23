@@ -31,7 +31,7 @@ static const char* const api_sunrise_host = "api.sunrise-sunset.org";
 
 static unsigned long lastCheckTime = 0;
 static unsigned long lastTimezoneCheckTime = 0;
-static unsigned int loopRefreshInterval = 3'600'000;
+static unsigned int loopRefreshInterval = 3600000;
 static const uint16_t max_google_timezone_retries = 5;
 static uint16_t google_timezone_retries = 0;
 static short lightsState = -1; // -1 auto, 0 off, 1 on
@@ -58,10 +58,10 @@ static NTPClient timeClient(ntpUDP);
 
 /* Change these infos to fit your needs*/
 static const IPAddress dns(8, 8, 8, 8);
-static const IPAddress localIP(192, 168, 0, 227);
+static const IPAddress localIP(192, 168, 0, 228);
 static const IPAddress gateway(192, 168, 0, 1);
 static const IPAddress subnet(255, 255, 255, 0);
-static ESP8266WebServer apiServer(8086);
+static ESP8266WebServer apiServer(8087);
 
 bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String *str = nullptr);
 void printWifiSignalStrength(String *str = nullptr);
@@ -359,6 +359,7 @@ void registerApiServerRequests() {
 
 	apiServer.on("/refresh_all", []() {
 		lastTimezoneCheckTime = 0;
+		lastCheckTime = 0;
 		apiServer.send(200, "text/html", "refreshed timezone & sunset check...");
 	});
 
