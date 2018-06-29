@@ -49,7 +49,7 @@ static unsigned int power_max_sec = 0;
 Set it to 0 to power on the lights exactly when the sunset happens
 */
 static int sunset_warn = 0;
-static char * google_api_key;
+static char *google_api_key;
 
 static time_si parsedSunset;
 static time_si now_time;
@@ -272,6 +272,14 @@ void registerApiServerRequests() {
 
 	apiServer.on("/get", []() {
 		apiServer.send(200, "text/html", String(lightsState));
+	});
+
+	apiServer.on("/get_real", []() {
+		if(lightsState != -1)
+			apiServer.send(200, "text/html", String(lightsState));
+		else
+			apiServer.send(200, "text/html", mustBeOn(now_time, parsedSunset, false) ? "1" : "0");
+			
 	});
 
 	apiServer.on("/param/set", HTTPMethod::HTTP_POST, []() {
