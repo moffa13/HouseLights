@@ -44,6 +44,8 @@ so the lights shut off */
 static unsigned int power_min_sec = 0;
 // Tell for how many seconds the lights should keep being on after midnight
 static unsigned int power_max_sec = 0;
+// When the sunrise did not happen yet, min second when to power on the lights until sunrise
+static unsigned int power_morning_min = 0;
 
 /* Time to set the lights on before the "official" sunset
 Set it to 0 to power on the lights exactly when the sunset happens
@@ -52,16 +54,17 @@ static int sunset_warn = 0;
 static char *google_api_key;
 
 static time_si parsedSunset;
+static time_si parsedSunrise;
 static time_si now_time;
 static WiFiUDP ntpUDP;
 static NTPClient timeClient(ntpUDP);
 
 /* Change these infos to fit your needs*/
 static const IPAddress dns(8, 8, 8, 8);
-static const IPAddress localIP(192, 168, 0, 228);
+static const IPAddress localIP(192, 168, 0, 227);
 static const IPAddress gateway(192, 168, 0, 1);
 static const IPAddress subnet(255, 255, 255, 0);
-static ESP8266WebServer apiServer(8087);
+static ESP8266WebServer apiServer(8086);
 
 bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String *str = nullptr);
 void printWifiSignalStrength(String *str = nullptr);
@@ -167,7 +170,7 @@ void setup() {
 
 	pinMode(RELAY_PIN, OUTPUT);
 	pinMode(LED_PIN, OUTPUT);
-	digitalWrite(RELAY_PIN, HIGH);
+	digitalWrite(RELAY_PIN, LOW);
 	digitalWrite(LED_PIN, HIGH);
 
 	WiFi.mode(WIFI_STA);
@@ -190,20 +193,23 @@ void readMemory() {
 	// power_max_sec 32 -> 63
 	// sunset_warn 64 -> 95
 	// google_api_key 96 -> 134
+	// power_morning_min 135 -> 166
 	EEPROM.get(0, power_min_sec);
 	EEPROM.get(32, power_max_sec);
 	EEPROM.get(64, sunset_warn);
 	for (uint16_t i = 0; i < 39; ++i) {
 		google_api_key[i] = EEPROM.read(96 + i);
 	}
+	EEPROM.get(135, power_morning_min);
 }
 
 void wipeMemory() {
 	power_min_sec = 0;
 	power_max_sec = 0;
+	power_morning_min = 0;
 	sunset_warn = 0;
 	memset(google_api_key, 0, 40);
-	for (uint16_t i = 0; i < 135; ++i)
+	for (uint16_t i = 0; i < 166; ++i)
 		EEPROM.write(i, 0);
 	EEPROM.commit();
 }
@@ -219,6 +225,13 @@ void updatePowerMaxSec(unsigned int value) {
 	if (value == power_max_sec) return;
 	power_max_sec = value;
 	EEPROM.put(32, power_max_sec);
+	EEPROM.commit();
+}
+
+void updatePowerMorningMinSec(unsigned int value) {
+	if (value == power_morning_min) return;
+	power_morning_min = value;
+	EEPROM.put(135, power_morning_min);
 	EEPROM.commit();
 }
 
@@ -292,6 +305,9 @@ void registerApiServerRequests() {
 			else if (param_name == "power_max") {
 				updatePowerMaxSec(atoi(apiServer.arg("param_value").c_str()));
 			}
+			else if (param_name == "power_morning_min") {
+				updatePowerMorningMinSec(atoi(apiServer.arg("param_value").c_str()));
+			}
 			else if (param_name == "sunset_warn") {
 				updateSunsetWarn(atoi(apiServer.arg("param_value").c_str()));
 			}
@@ -324,6 +340,9 @@ void registerApiServerRequests() {
 			}
 			else if (param_name == "power_max") {
 				apiServer.send(200, "text/html", String(power_max_sec));
+			}
+			else if (param_name == "power_morning_min") {
+				apiServer.send(200, "text/html", String(power_morning_min));
 			}
 			else if (param_name == "sunset_warn") {
 				apiServer.send(200, "text/html", String(sunset_warn));
@@ -452,7 +471,23 @@ void update_time_from_ntp() {
 	now_time.second = timeClient.getSeconds();
 }
 
-String currentLine;
+/*
+* Change the time to work with the timezone
+*/
+void adaptTimezone(time_si &time) {
+	float timezoneHourf{ timezone_offset / 3600.0f };
+	byte timezoneHour{ static_cast<byte>(timezoneHourf) };
+	byte timezoneMinute{ static_cast<byte>(fmod(timezoneHourf, 1) * 60) };
+	time.hour += timezoneHour;
+	time.minute += timezoneMinute;
+
+	if (time.minute > 59) {
+		time.minute -= 60;
+		time.hour += 1;
+	}
+
+	if (time.hour > 23) time.hour = time.hour - 24;
+}
 
 void loop() {
 
@@ -476,20 +511,13 @@ void loop() {
 
 			if (autoDebug)
 				Serial.println("Successfully retrieved sunset hour");
-			parsedSunset = sunset.result;
+			parsedSunset = sunset.sunset;
+			parsedSunrise = sunset.sunrise;
 
-			float timezoneHourf{ timezone_offset / 3600.0f };
-			byte timezoneHour{ static_cast<byte>(timezoneHourf) };
-			byte timezoneMinute{ static_cast<byte>(fmod(timezoneHourf, 1) * 60)};
-			parsedSunset.hour += timezoneHour;
-			parsedSunset.minute += timezoneMinute;
+			adaptTimezone(parsedSunset);
+			adaptTimezone(parsedSunrise);
 
-			if (parsedSunset.minute > 59) {
-				parsedSunset.minute -= 60;
-				parsedSunset.hour += 1;
-			}
-
-			if (parsedSunset.hour > 23) parsedSunset.hour = parsedSunset.hour - 24;
+			
 
 			// Update last check time only if it succeeds
 			lastCheckTime = millis();
@@ -505,58 +533,6 @@ void loop() {
 	apiServer.handleClient();
 
 	updateLightsState();
-	
-	if (Serial.available() > 0) { // Wrote something
-		int serialToRead = Serial.available();
-		char* buffer = static_cast<char*>(malloc(serialToRead));
-		memset(buffer, '\0', serialToRead);
-		Serial.readBytes(reinterpret_cast<uint8_t*>(buffer), static_cast<size_t>(serialToRead));
-
-		currentLine += buffer;
-
-		if (currentLine.endsWith("\r")) {
-
-			currentLine = currentLine.substring(0, currentLine.length() - 1);
-			Serial.print("\n");
-
-			// Process
-			if (currentLine.equalsIgnoreCase("info")) {
-				Serial.println("\n");
-				printInfos();
-			}else if (currentLine.equalsIgnoreCase("lights -1")) {
-				lightsState = -1;
-				lastCheckTime = 0;
-			}else if (currentLine.equalsIgnoreCase("lights 0")) {
-				lightsState = 0;
-				lastCheckTime = 0;
-			}else if (currentLine.equalsIgnoreCase("lights 1")) {
-				lightsState = 1;
-				lastCheckTime = 0;
-			}else if (currentLine.equalsIgnoreCase("debug 0")) {
-				autoDebug = false;
-			}else if (currentLine.equalsIgnoreCase("debug 1")) {
-				autoDebug = true;
-			}else if (currentLine.startsWith("interval ")) {
-				loopRefreshInterval = atoi(currentLine.substring(9, currentLine.length()).c_str());
-			}else if (currentLine.startsWith("refresh")) {
-				lastCheckTime = 0;
-			}else if (currentLine.startsWith("rfshtmz")) {
-				setTimezone();
-			}
-			else if (currentLine.startsWith("reboot")) {
-				ESP.restart();
-			}
-			else if (currentLine.startsWith("coreinf")) {
-				debug_esp_infos();
-			}else {
-				Serial.println("Unknown command, available commands are : info, lights<-1, 0, 1>, debug<0,1>, interval <interval>, refresh, rfshtmz, coreinfo, reboot");
-			}
-
-			currentLine = String{};
-		}
-		Serial.print(buffer);
-		free(buffer);
-	}
 
 	yield();
 
@@ -574,7 +550,7 @@ void updateLightsState() {
 }
 
 
-void debug_esp_infos() {
+/*void debug_esp_infos() {
 	Serial.printf("ESP.getFreeHeap()              : %d\r\n", ESP.getFreeHeap());   //  returns the free heap size.
 	Serial.printf("ESP.getChipId()                : 0x%X\r\n", ESP.getChipId());   //  returns the ESP8266 chip ID as a 32-bit integer.
 	Serial.printf("ESP.getSdkVersion()            : %d\r\n", ESP.getSdkVersion());
@@ -601,7 +577,7 @@ void debug_esp_infos() {
 	Serial.println((*xyz).epc3);
 	Serial.println((*xyz).excvaddr);
 	Serial.println((*xyz).depc);
-}
+}*/
 
 String IpAddress2String(const IPAddress& ipAddress){
 	return String(ipAddress[0]) + "." + \
@@ -634,6 +610,7 @@ void printInfos(bool toSerial, String *str) {
 	infos += String{ "Timezone : " } + timezone_offset + "s\n";
 	infos += String{ "Current time : " } + timeClient.getFormattedTime() + "\n";
 	infos += String{ "Sunset is at : " } + parsedSunset.hour + ":" + parsedSunset.minute + ":" + parsedSunset.second + "\n";
+	infos += String{ "Sunrise is at : " } + parsedSunrise.hour + ":" + parsedSunrise.minute + ":" + parsedSunrise.second + "\n";
 	infos += String{ "Warn defined to : " } + sunset_warn + "s" + "\n";
 	infos += String{ "Auto on between " } + power_min_sec + "s and " + power_max_sec + "s\n";
 	infos += String{ "API key is " } + google_api_key + "\n";
@@ -696,6 +673,10 @@ bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String *str
 				Serial.println(infos);
 			}
 		}
+		return true;
+	}
+	else if (power_morning_min != 0 && now_time >= power_morning_min && now_time < getTimeSecond(parsedSunrise)) {
+		infos += String{ "Morning mode before sunrise\n" };
 		return true;
 	}
 	else { 
@@ -781,7 +762,9 @@ time_safe getApiSunrise() {
 	if (root.success() && strcmp(root["status"], "OK") == 0) {
 		t.no_error = true;
 		String sunset = root["results"]["sunset"];
-		t.result = parseTimeH24(sunset);
+		String sunrise = root["results"]["sunrise"];
+		t.sunset = parseTimeH24(sunset);
+		t.sunrise = parseTimeH24(sunrise);
 	}
 
 	return t;

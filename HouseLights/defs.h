@@ -7,7 +7,8 @@ typedef struct {
 
 typedef struct {
 	boolean no_error;
-	time_si result;
+	time_si sunset;
+	time_si sunrise;
 } time_safe;
 
 typedef struct {
