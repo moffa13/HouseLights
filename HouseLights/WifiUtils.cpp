@@ -37,7 +37,7 @@ namespace WifiUtils {
 	}
 
 	bool isWifiConnected() {
-		return WiFi.status() == WL_CONNECTED;
+		return WiFi.waitForConnectResult() == WL_CONNECTED;
 	}
 
 	bool isWifiTimedOut() {

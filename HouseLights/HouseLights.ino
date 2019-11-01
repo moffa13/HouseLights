@@ -1,13 +1,10 @@
-﻿#include <ESP8266WiFi.h>
+﻿#include <GDBStub.h>
+#include <ESP8266WiFi.h>
+#include <WiFiClientSecureBearSSL.h>
 #include <EEPROM.h>
 #include <ESP8266WebServer.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
-#include <WiFiServer.h>
-#include <WiFiClientSecure.h>
-#include <WiFiClient.h>
-#include <ESP8266WiFiMulti.h>
-#include <ESP8266HTTPClient.h>
 #include <ArduinoJson.h>
 #include "defs.h"
 #include "WifiUtils.h"
@@ -28,6 +25,8 @@ static const char* const wifi_password = "YOUR_PASSWORD";
 static const char* const latitude = "YOUR_LATITUDE";
 static const char* const longitude = "YOUR_LONGITUDE";
 static const char* const api_sunrise_host = "api.sunrise-sunset.org";
+static const uint8_t api_sunrise_fingerprint[20] = { 0x21, 0x86, 0x08, 0x8F, 0x39, 0xC3, 0x12, 0x0E, 0xEB, 0x0F, 0x76, 0x5E, 0x07, 0x36, 0xF1, 0x0D, 0x4B, 0x27, 0x8A, 0x3B };
+static const uint8_t google_api_fingerprint[20] = { 0x43, 0x2F, 0x75, 0x94, 0xFB, 0x9C, 0x00, 0xAB, 0xEE, 0x26, 0x22, 0x61, 0x57, 0x50, 0xBF, 0xB4, 0xD2, 0x05, 0x85, 0xC7 };
 
 static unsigned long lastCheckTime = 0;
 static unsigned long lastTimezoneCheckTime = 0;
@@ -61,10 +60,10 @@ static NTPClient timeClient(ntpUDP);
 
 /* Change these infos to fit your needs*/
 static const IPAddress dns(8, 8, 8, 8);
-static const IPAddress localIP(192, 168, 0, 235);
+static const IPAddress localIP(192, 168, 0, 20);
 static const IPAddress gateway(192, 168, 0, 1);
 static const IPAddress subnet(255, 255, 255, 0);
-static ESP8266WebServer apiServer(8087);
+static ESP8266WebServer apiServer(125);
 
 bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str = nullptr);
 void printWifiSignalStrength(String* str = nullptr);
@@ -117,22 +116,30 @@ bool setTimezone() {
 		do {
 			checkWiFi();
 			timezone_result = getTimezone();
+
 			if (timezone_result.error) {
 				google_timezone_retries++;
+#ifndef _DEBUG
 				Serial.println("Failed retrieving timezone, retrying in 1 second");
+#endif
 				delay(1000);
 			}
-		} while (google_timezone_retries != max_google_timezone_retries); // Retry if google timezone returned an error
+		} while (timezone_result.error && google_timezone_retries != max_google_timezone_retries); // Retry if google timezone returned an error
 #endif
 		if (!timezone_result.error) {
+			Serial.println("2");
 			if (timezone_offset != timezone_result.timezone) {
 				timeClient.setTimeOffset(timezone_result.timezone);
+#ifndef _DEBUG
 				Serial.println(String{ "Set Timezone to " } +timezone_result.timezone + "s");
+#endif
 				timezone_offset = timezone_result.timezone;
 				return true;
 			}
 			else {
+#ifndef _DEBUG
 				Serial.println(String{ "Timezone did not change (" } +timezone_offset + "s)");
+#endif
 				return false;
 			}
 		}
@@ -140,13 +147,20 @@ bool setTimezone() {
 		lastTimezoneCheckTime = millis();
 	}
 	else if (google_api_key[0] == 0) {
+#ifndef _DEBUG
 		Serial.println("Warning, google_api_key not set");
+#endif
 	}
 }
 
 void setup() {
 
+	gdbstub_init();
+
+#ifndef _DEBUG
 	Serial.begin(9600);
+#endif
+
 	while (!Serial) {
 		;; // Wait for serial working
 	}
@@ -177,7 +191,9 @@ void setup() {
 
 	apiServer.begin();
 
+#ifndef _DEBUG
 	Serial.println("Ready.");
+#endif
 }
 
 void readMemory() {
@@ -390,32 +406,26 @@ void registerApiServerRequests() {
 		});
 }
 
-String http_call(String host, String url, ushort port = 0, bool ssl = true, const char* fingerprint = nullptr) {
+String http_call(String host, String url, ushort port = 0, bool ssl = true, const uint8_t* fingerprint = nullptr) {
 
-	WiFiClient* client;
+	BearSSL::WiFiClientSecure client;
 
 	if (ssl) {
-		client = new WiFiClientSecure;
-		/*WiFiClientSecure* secure = reinterpret_cast<WiFiClientSecure*>(client);
-		if (!secure->verify(fingerprint, host.c_str())) {
-			Serial.println("Wrong ssl cert fingerprint, refusing connection");
-			delete secure;
-			return "";
-		}*/
-	}
-	else {
-		client = new WiFiClient;
+		client.setFingerprint(fingerprint);
 	}
 
 	ushort _port{ port == 0 ? (ssl ? 443 : 80) : port };
-	int res = client->connect(host.c_str(), _port);
-	if (res != 1) {
-		Serial.println(String{ "Could not connect to host " } +host + ":" + _port + " (" + res + ")");
-		delete client;
+
+	client.connect(host.c_str(), _port);
+
+	if (!client.connected()) {
+#ifndef _DEBUG
+		Serial.println(String{ "Could not connect to host " } +host + ":" + _port);
+#endif
 		return "";
 	}
 
-	client->print(String("GET ") + url + " HTTP/1.0\r\n" +
+	client.print(String("GET ") + url + " HTTP/1.0\r\n" +
 		"Host: " + host + "\r\n" +
 		"User-Agent: ESP8266\r\n" +
 		"Connection: close\r\n\r\n");
@@ -424,8 +434,8 @@ String http_call(String host, String url, ushort port = 0, bool ssl = true, cons
 
 	String line;
 
-	while (client->connected()) {
-		String tmp{ client->readStringUntil('\n') };
+	while (client.available()) {
+		String tmp{ client.readStringUntil('\n') };
 		if (isContent) {
 			line += tmp;
 		}
@@ -433,8 +443,6 @@ String http_call(String host, String url, ushort port = 0, bool ssl = true, cons
 			isContent = true;
 		}
 	}
-
-	delete client;
 
 	return line;
 
@@ -449,13 +457,16 @@ void checkWiFi() {
 	do {
 		connected = WifiUtils::connect(wifi_ssid, wifi_password, true, 15, &localIP, &gateway, &subnet, &dns);
 		if (!connected) {
+#ifndef _DEBUG
 			Serial.println("Could not connnect to WiFi, retrying.");
+#endif
 		}
 	} while (!connected);
 
 	digitalWrite(LED_PIN, LOW); // Obvious
-
+#ifndef _DEBUG
 	Serial.println("Connected to WiFi.");
+#endif
 }
 
 void update_time_from_ntp() {
@@ -496,15 +507,16 @@ void loop() {
 		if (setTimezone()) {
 			update_time_from_ntp();
 		}
-
 		time_safe const sunset = getApiSunrise();
 
 		if (sunset.no_error) {
 
 			sunset_ok = true;
 
+#ifndef _DEBUG
 			if (autoDebug)
 				Serial.println("Successfully retrieved sunset hour");
+#endif
 			parsedSunset = sunset.sunset;
 			parsedSunrise = sunset.sunrise;
 
@@ -517,7 +529,9 @@ void loop() {
 			lastCheckTime = millis();
 		}
 		else {
+#ifndef _DEBUG
 			Serial.println("Didn't retrieve sunset hour");
+#endif
 		}
 
 		if (autoDebug)
@@ -543,36 +557,6 @@ void updateLightsState() {
 		}
 	}
 }
-
-
-/*void debug_esp_infos() {
-	Serial.printf("ESP.getFreeHeap()              : %d\r\n", ESP.getFreeHeap());   //  returns the free heap size.
-	Serial.printf("ESP.getChipId()                : 0x%X\r\n", ESP.getChipId());   //  returns the ESP8266 chip ID as a 32-bit integer.
-	Serial.printf("ESP.getSdkVersion()            : %d\r\n", ESP.getSdkVersion());
-	Serial.printf("ESP.getBootVersion()           : %d\r\n", ESP.getBootVersion());
-	Serial.printf("ESP.getBootMode()              : %d\r\n", ESP.getBootMode());
-	Serial.printf("ESP.getCpuFreqMHz()            : %d\r\n", ESP.getCpuFreqMHz());
-	Serial.printf("ESP.getFlashChipId()           : 0x%X\r\n", ESP.getFlashChipId());
-	Serial.printf("ESP.getFlashChipRealSize()     : %d\r\n", ESP.getFlashChipRealSize());
-	Serial.printf("ESP.getFlashChipSize()         : %d\r\n", ESP.getFlashChipSize());  //returns the flash chip size, in bytes, as seen by the SDK (may be less than actual size).
-	Serial.printf("ESP.getFlashChipSpeed()        : %d\r\n", ESP.getFlashChipSpeed()); // returns the flash chip frequency, in Hz.
-	Serial.printf("ESP.getFlashChipMode()         : %d\r\n", ESP.getFlashChipMode());
-	Serial.printf("ESP.getFlashChipSizeByChipId() : 0x%X\r\n", ESP.getFlashChipSizeByChipId());
-	Serial.printf("ESP.getSketchSize()            : %d\r\n", ESP.getSketchSize());
-	Serial.printf("ESP.getFreeSketchSpace()       : %d\r\n", ESP.getFreeSketchSpace());
-	Serial.printf("ESP.getCycleCount()            : %d\r\n", ESP.getCycleCount()); // returns the cpu instruction cycle count since start as an unsigned 32-bit. This is useful for accurate timing of very short actions like bit banging.
-
-	rst_info *xyz;
-	Serial.printf("ESP.getResetInfoPtr()\r\n");
-	xyz = ESP.getResetInfoPtr();
-	Serial.println((*xyz).reason);
-	Serial.println((*xyz).exccause);
-	Serial.println((*xyz).epc1);
-	Serial.println((*xyz).epc2);
-	Serial.println((*xyz).epc3);
-	Serial.println((*xyz).excvaddr);
-	Serial.println((*xyz).depc);
-}*/
 
 String IpAddress2String(const IPAddress& ipAddress) {
 	return String(ipAddress[0]) + "." + \
@@ -609,12 +593,15 @@ void printInfos(bool toSerial, String* str) {
 	infos += String{ "Warn defined to : " } +sunset_warn + "s" + "\n";
 	infos += String{ "Auto on between " } +power_min_sec + "s and " + power_max_sec + "s\n";
 	infos += String{ "API key is " } +google_api_key + "\n";
+	infos += String{ "Free heap : " } +ESP.getFreeHeap() + "\n";
 	if (lightsState != -1)
 		infos += String{ "Warning : Lights are not set to automatic (" } +static_cast<int>(lightsState) + ") !\n";
 
 	mustBeOn(now_time, parsedSunset, true, &infos);
 	if (toSerial) {
+#ifndef _DEBUG
 		Serial.println(infos);
+#endif
 	}
 	else if (str != nullptr) {
 		(*str) += infos;
@@ -666,7 +653,9 @@ bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str
 				(*str) += infos;
 			}
 			else {
+#ifndef _DEBUG
 				Serial.println(infos);
+#endif
 			}
 		}
 		return true;
@@ -682,7 +671,9 @@ bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str
 				(*str) += infos;
 			}
 			else {
+#ifndef _DEBUG
 				Serial.println(infos);
+#endif
 			}
 		}
 		return false;
@@ -694,24 +685,26 @@ google_timezone_result getTimezone() {
 	google_timezone_result res{ false, 0, 1 };
 
 	const char* host = "maps.googleapis.com";
-	const char* fingerprint = "43 2f 75 94 fb 9c 00 ab ee 26 22 61 57 50 bf b4 d2 05 85 c7";
-	//const uint8_t fingerprint[20] = { 0x43, 0x2F, 0x75, 0x94, 0xFB, 0x9C, 0x00, 0xAB, 0xEE, 0x26, 0x22, 0x61, 0x57, 0x50, 0xBF, 0xB4, 0xD2, 0x05, 0x85, 0xC7 };
 
 	String url{ String{"/maps/api/timezone/json?location="} +latitude + "," + longitude + "&timestamp=" + timeClient.getEpochTime() + "&key=" + google_api_key };
 
-	String content{ http_call(host, url, 0, true, fingerprint) };
+	String content{ http_call(host, url, 0, true, google_api_fingerprint) };
 
 	StaticJsonDocument<800> jsonDoc;
 	auto error = deserializeJson(jsonDoc, content.c_str(), DeserializationOption::NestingLimit(10));
 
+#ifndef _DEBUG
 	if (autoDebug) {
 		Serial.println(url);
 		Serial.println(content);
 	}
+#endif
 
 	if (error || strcmp(jsonDoc["status"], "OK") != 0) {
+#ifndef _DEBUG
 		Serial.println("Error parsing Google api JSON");
 		Serial.println(jsonDoc["status"].as<String>());
+#endif
 		res.error = true;
 		if (jsonDoc["status"] == "INVALID_REQUEST") {
 			res.error_type = 1;
@@ -734,7 +727,9 @@ google_timezone_result getTimezone() {
 
 	}
 	else if (autoDebug) {
+#ifndef _DEBUG
 		Serial.println("Successfully received from Google Maps API");
+#endif
 	}
 
 	res.timezone = jsonDoc["dstOffset"].as<int>() + jsonDoc["rawOffset"].as<int>();
@@ -745,15 +740,13 @@ google_timezone_result getTimezone() {
 time_safe getApiSunrise() {
 	String url{ String{"/json?lat="} +latitude + "&lng=" + longitude + "&date=today" };
 
-	const char* fingerprint = "21 86 08 8f 39 c3 12 0e eb 0f 76 5e 07 36 f1 0d 4b 27 8a 3b";
-	//const uint8_t fingerprint[20] = { 0x21, 0x86, 0x08, 0x8F, 0x39, 0xC3, 0x12, 0x0E, 0xEB, 0x0F, 0x76, 0x5E, 0x07, 0x36, 0xF1, 0x0D, 0x4B, 0x27, 0x8A, 0x3B };
+	String content{ http_call(api_sunrise_host, url, 0, true, api_sunrise_fingerprint) };
 
-	String content{ http_call(api_sunrise_host, url, 0, true, fingerprint) };
-
+#ifndef _DEBUG
 	if (autoDebug) {
 		Serial.println(content);
 	}
-
+#endif
 
 	StaticJsonDocument<800> jsonDoc;
 	auto error = deserializeJson(jsonDoc, content.c_str(), DeserializationOption::NestingLimit(10));
