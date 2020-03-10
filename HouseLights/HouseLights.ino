@@ -20,13 +20,72 @@ static int timezone_offset = 1; // Offset to apply from NTP's time, 1 is unset, 
 #define RELAY_PIN 0
 #define LED_PIN 2
 
+#define HTTP_REQUEST_TIMEOUT_MS 5000
+
+static const char letsencryptCA[] PROGMEM = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIEkjCCA3qgAwIBAgIQCgFBQgAAAVOFc2oLheynCDANBgkqhkiG9w0BAQsFADA/
+MSQwIgYDVQQKExtEaWdpdGFsIFNpZ25hdHVyZSBUcnVzdCBDby4xFzAVBgNVBAMT
+DkRTVCBSb290IENBIFgzMB4XDTE2MDMxNzE2NDA0NloXDTIxMDMxNzE2NDA0Nlow
+SjELMAkGA1UEBhMCVVMxFjAUBgNVBAoTDUxldCdzIEVuY3J5cHQxIzAhBgNVBAMT
+GkxldCdzIEVuY3J5cHQgQXV0aG9yaXR5IFgzMIIBIjANBgkqhkiG9w0BAQEFAAOC
+AQ8AMIIBCgKCAQEAnNMM8FrlLke3cl03g7NoYzDq1zUmGSXhvb418XCSL7e4S0EF
+q6meNQhY7LEqxGiHC6PjdeTm86dicbp5gWAf15Gan/PQeGdxyGkOlZHP/uaZ6WA8
+SMx+yk13EiSdRxta67nsHjcAHJyse6cF6s5K671B5TaYucv9bTyWaN8jKkKQDIZ0
+Z8h/pZq4UmEUEz9l6YKHy9v6Dlb2honzhT+Xhq+w3Brvaw2VFn3EK6BlspkENnWA
+a6xK8xuQSXgvopZPKiAlKQTGdMDQMc2PMTiVFrqoM7hD8bEfwzB/onkxEz0tNvjj
+/PIzark5McWvxI0NHWQWM6r6hCm21AvA2H3DkwIDAQABo4IBfTCCAXkwEgYDVR0T
+AQH/BAgwBgEB/wIBADAOBgNVHQ8BAf8EBAMCAYYwfwYIKwYBBQUHAQEEczBxMDIG
+CCsGAQUFBzABhiZodHRwOi8vaXNyZy50cnVzdGlkLm9jc3AuaWRlbnRydXN0LmNv
+bTA7BggrBgEFBQcwAoYvaHR0cDovL2FwcHMuaWRlbnRydXN0LmNvbS9yb290cy9k
+c3Ryb290Y2F4My5wN2MwHwYDVR0jBBgwFoAUxKexpHsscfrb4UuQdf/EFWCFiRAw
+VAYDVR0gBE0wSzAIBgZngQwBAgEwPwYLKwYBBAGC3xMBAQEwMDAuBggrBgEFBQcC
+ARYiaHR0cDovL2Nwcy5yb290LXgxLmxldHNlbmNyeXB0Lm9yZzA8BgNVHR8ENTAz
+MDGgL6AthitodHRwOi8vY3JsLmlkZW50cnVzdC5jb20vRFNUUk9PVENBWDNDUkwu
+Y3JsMB0GA1UdDgQWBBSoSmpjBH3duubRObemRWXv86jsoTANBgkqhkiG9w0BAQsF
+AAOCAQEA3TPXEfNjWDjdGBX7CVW+dla5cEilaUcne8IkCJLxWh9KEik3JHRRHGJo
+uM2VcGfl96S8TihRzZvoroed6ti6WqEBmtzw3Wodatg+VyOeph4EYpr/1wXKtx8/
+wApIvJSwtmVi4MFU5aMqrSDE6ea73Mj2tcMyo5jMd6jmeWUHK8so/joWUoHOUgwu
+X4Po1QYz+3dszkDqMp4fklxBwXRsW10KXzPMTZ+sOPAveyxindmjkW8lGy+QsRlG
+PfZ+G6Z6h7mjem0Y+iWlkYcV4PIWL1iwBi8saCbGS5jN2p8M+X+Q7UNKEkROb3N6
+KOqkqm57TH2H3eDJAkSnh6/DNFu0Qg==
+-----END CERTIFICATE-----
+)EOF";
+
+static const char googleCA[] PROGMEM = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIESjCCAzKgAwIBAgINAeO0mqGNiqmBJWlQuDANBgkqhkiG9w0BAQsFADBMMSAw
+HgYDVQQLExdHbG9iYWxTaWduIFJvb3QgQ0EgLSBSMjETMBEGA1UEChMKR2xvYmFs
+U2lnbjETMBEGA1UEAxMKR2xvYmFsU2lnbjAeFw0xNzA2MTUwMDAwNDJaFw0yMTEy
+MTUwMDAwNDJaMEIxCzAJBgNVBAYTAlVTMR4wHAYDVQQKExVHb29nbGUgVHJ1c3Qg
+U2VydmljZXMxEzARBgNVBAMTCkdUUyBDQSAxTzEwggEiMA0GCSqGSIb3DQEBAQUA
+A4IBDwAwggEKAoIBAQDQGM9F1IvN05zkQO9+tN1pIRvJzzyOTHW5DzEZhD2ePCnv
+UA0Qk28FgICfKqC9EksC4T2fWBYk/jCfC3R3VZMdS/dN4ZKCEPZRrAzDsiKUDzRr
+mBBJ5wudgzndIMYcLe/RGGFl5yODIKgjEv/SJH/UL+dEaltN11BmsK+eQmMF++Ac
+xGNhr59qM/9il71I2dN8FGfcddwuaej4bXhp0LcQBbjxMcI7JP0aM3T4I+DsaxmK
+FsbjzaTNC9uzpFlgOIg7rR25xoynUxv8vNmkq7zdPGHXkxWY7oG9j+JkRyBABk7X
+rJfoucBZEqFJJSPk7XA0LKW0Y3z5oz2D0c1tJKwHAgMBAAGjggEzMIIBLzAOBgNV
+HQ8BAf8EBAMCAYYwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMBIGA1Ud
+EwEB/wQIMAYBAf8CAQAwHQYDVR0OBBYEFJjR+G4Q68+b7GCfGJAboOt9Cf0rMB8G
+A1UdIwQYMBaAFJviB1dnHB7AagbeWbSaLd/cGYYuMDUGCCsGAQUFBwEBBCkwJzAl
+BggrBgEFBQcwAYYZaHR0cDovL29jc3AucGtpLmdvb2cvZ3NyMjAyBgNVHR8EKzAp
+MCegJaAjhiFodHRwOi8vY3JsLnBraS5nb29nL2dzcjIvZ3NyMi5jcmwwPwYDVR0g
+BDgwNjA0BgZngQwBAgIwKjAoBggrBgEFBQcCARYcaHR0cHM6Ly9wa2kuZ29vZy9y
+ZXBvc2l0b3J5LzANBgkqhkiG9w0BAQsFAAOCAQEAGoA+Nnn78y6pRjd9XlQWNa7H
+TgiZ/r3RNGkmUmYHPQq6Scti9PEajvwRT2iWTHQr02fesqOqBY2ETUwgZQ+lltoN
+FvhsO9tvBCOIazpswWC9aJ9xju4tWDQH8NVU6YZZ/XteDSGU9YzJqPjY8q3MDxrz
+mqepBCf5o8mw/wJ4a2G6xzUr6Fb6T8McDO22PLRL6u3M4Tzs3A2M1j6bykJYi8wW
+IRdAvKLWZu/axBVbzYmqmwkm5zLSDW5nIAJbELCQCZwMH56t2Dvqofxs6BBcCFIZ
+USpxu6x6td0V7SvJCCosirSmIatj/9dSSVDQibet8q/7UK4v4ZUN80atnZz1yg==
+-----END CERTIFICATE-----
+
+)EOF";
+
 static const char* const wifi_ssid = "YOUR_SSID";
 static const char* const wifi_password = "YOUR_PASSWORD";
 static const char* const latitude = "YOUR_LATITUDE";
 static const char* const longitude = "YOUR_LONGITUDE";
 static const char* const api_sunrise_host = "api.sunrise-sunset.org";
-static const uint8_t api_sunrise_fingerprint[20] = { 0x21, 0x86, 0x08, 0x8F, 0x39, 0xC3, 0x12, 0x0E, 0xEB, 0x0F, 0x76, 0x5E, 0x07, 0x36, 0xF1, 0x0D, 0x4B, 0x27, 0x8A, 0x3B };
-static const uint8_t google_api_fingerprint[20] = { 0x43, 0x2F, 0x75, 0x94, 0xFB, 0x9C, 0x00, 0xAB, 0xEE, 0x26, 0x22, 0x61, 0x57, 0x50, 0xBF, 0xB4, 0xD2, 0x05, 0x85, 0xC7 };
 
 static unsigned long lastCheckTime = 0;
 static unsigned long lastTimezoneCheckTime = 0;
@@ -50,7 +109,7 @@ static unsigned int power_morning_min = 0;
 Set it to 0 to power on the lights exactly when the sunset happens
 */
 static int sunset_warn = 0;
-static char* google_api_key;
+static char google_api_key[40] = { 0 };
 
 static time_si parsedSunset;
 static time_si parsedSunrise;
@@ -60,14 +119,15 @@ static NTPClient timeClient(ntpUDP);
 
 /* Change these infos to fit your needs*/
 static const IPAddress dns(8, 8, 8, 8);
-static const IPAddress localIP(192, 168, 0, 20);
+static const IPAddress localIP(192, 168, 0, 222);
 static const IPAddress gateway(192, 168, 0, 1);
 static const IPAddress subnet(255, 255, 255, 0);
-static ESP8266WebServer apiServer(125);
+static ESP8266WebServer apiServer(222);
 
 bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str = nullptr);
 void printWifiSignalStrength(String* str = nullptr);
 void printInfos(bool toSerial = true, String* str = nullptr);
+void checkWifi(bool connectAnyway = false);
 
 double fmod(double x, double y) {
 	return x - y * floor(x / y);
@@ -110,11 +170,11 @@ time_si parseTimeH24(String const& time) {
 }
 
 bool setTimezone() {
-	if (google_api_key[0] != 0 && millis() > lastTimezoneCheckTime + loopRefreshInterval || lastTimezoneCheckTime == 0) {
 #ifdef USE_TIMEZONE_API	
+	if ((google_api_key[0] != 0 && millis() > lastTimezoneCheckTime + loopRefreshInterval) || lastTimezoneCheckTime == 0) { // Has a google api key configured and it is time to update
 		google_timezone_result timezone_result;
 		do {
-			checkWiFi();
+			checkWifi();
 			timezone_result = getTimezone();
 
 			if (timezone_result.error) {
@@ -125,9 +185,8 @@ bool setTimezone() {
 				delay(1000);
 			}
 		} while (timezone_result.error && google_timezone_retries != max_google_timezone_retries); // Retry if google timezone returned an error
-#endif
+
 		if (!timezone_result.error) {
-			Serial.println("2");
 			if (timezone_offset != timezone_result.timezone) {
 				timeClient.setTimeOffset(timezone_result.timezone);
 #ifndef _DEBUG
@@ -151,45 +210,43 @@ bool setTimezone() {
 		Serial.println("Warning, google_api_key not set");
 #endif
 	}
+#endif
 }
 
 void setup() {
-
-	gdbstub_init();
-
-#ifndef _DEBUG
-	Serial.begin(9600);
-#endif
-
-	while (!Serial) {
-		;; // Wait for serial working
-	}
-
-	EEPROM.begin(4096);
-
-	google_api_key = static_cast<char*>(malloc(40));
-	memset(google_api_key, 0, 40);
-
-	readMemory();
-
-	WiFi.setAutoReconnect(true);
 
 	pinMode(RELAY_PIN, OUTPUT);
 	pinMode(LED_PIN, OUTPUT);
 	digitalWrite(RELAY_PIN, LOW);
 	digitalWrite(LED_PIN, HIGH);
 
-	WiFi.mode(WIFI_STA);
+#ifdef _DEBUG
+	gdbstub_init();
+#else
+	Serial.begin(9600);
+	while (!Serial) {
+		;; // Wait for serial to work
+	}
+#endif
 
-	checkWiFi();
+	EEPROM.begin(256);
+
+	readMemory();
+
+	checkWifi(true);
+
+#ifndef _DEBUG
+	Serial.println(String("Local ip is : " + IpAddress2String(WiFi.localIP())));
+#endif
 
 	timeClient.begin();
+	timeClient.forceUpdate(); // At this point we should get UTC time
 
 	setTimezone();
 
-	registerApiServerRequests();
-
 	apiServer.begin();
+
+	registerApiServerRequests();
 
 #ifndef _DEBUG
 	Serial.println("Ready.");
@@ -406,21 +463,24 @@ void registerApiServerRequests() {
 		});
 }
 
-String http_call(String host, String url, ushort port = 0, bool ssl = true, const uint8_t* fingerprint = nullptr) {
+String http_call(String host, String url, ushort port = 0, bool ssl = true, const char* trustedCert = nullptr) {
 
 	BearSSL::WiFiClientSecure client;
+	BearSSL::X509List cert;
 
 	if (ssl) {
-		client.setFingerprint(fingerprint);
+		cert.append(trustedCert);
+		client.setTrustAnchors(&cert);
+		client.setX509Time(timeClient.getEpochTime());
 	}
-
+	
 	ushort _port{ port == 0 ? (ssl ? 443 : 80) : port };
 
 	client.connect(host.c_str(), _port);
 
 	if (!client.connected()) {
 #ifndef _DEBUG
-		Serial.println(String{ "Could not connect to host " } +host + ":" + _port);
+		Serial.println(String{ "Could not connect to host " } + host + ":" + _port);
 #endif
 		return "";
 	}
@@ -429,6 +489,17 @@ String http_call(String host, String url, ushort port = 0, bool ssl = true, cons
 		"Host: " + host + "\r\n" +
 		"User-Agent: ESP8266\r\n" +
 		"Connection: close\r\n\r\n");
+
+	unsigned long timeout = millis();
+	while (client.available() == 0) {
+		if (millis() - timeout > HTTP_REQUEST_TIMEOUT_MS)
+		{
+			Serial.println("Client Timed out");
+			client.stop();
+			return "";
+		}
+		yield();
+	}
 
 	bool isContent{ false };
 
@@ -450,11 +521,13 @@ String http_call(String host, String url, ushort port = 0, bool ssl = true, cons
 
 // Returns only when connected to WiFi
 // Enable the LED_PIN when connected and disable it while connecting
-void checkWiFi() {
-	if (WifiUtils::isWifiConnected()) return;
+void checkWifi(bool connectAnyway){
+	if (!connectAnyway && WifiUtils::isWifiConnected()) return;
 	digitalWrite(LED_PIN, HIGH);
 	bool connected{ false };
 	do {
+		WiFi.mode(WIFI_STA);
+		WiFi.setAutoReconnect(true);
 		connected = WifiUtils::connect(wifi_ssid, wifi_password, true, 15, &localIP, &gateway, &subnet, &dns);
 		if (!connected) {
 #ifndef _DEBUG
@@ -462,6 +535,8 @@ void checkWiFi() {
 #endif
 		}
 	} while (!connected);
+
+	delay(100);
 
 	digitalWrite(LED_PIN, LOW); // Obvious
 #ifndef _DEBUG
@@ -501,7 +576,7 @@ void loop() {
 	// Check the new sunset every <loopRefreshInterval>ms
 	if (millis() > lastCheckTime + loopRefreshInterval || lastCheckTime == 0) {
 
-		checkWiFi();
+		checkWifi();
 
 		// If timezone's changed, update the time
 		if (setTimezone()) {
@@ -531,6 +606,7 @@ void loop() {
 		else {
 #ifndef _DEBUG
 			Serial.println("Didn't retrieve sunset hour");
+			lastCheckTime = millis() - loopRefreshInterval + 1000;
 #endif
 		}
 
@@ -688,7 +764,7 @@ google_timezone_result getTimezone() {
 
 	String url{ String{"/maps/api/timezone/json?location="} +latitude + "," + longitude + "&timestamp=" + timeClient.getEpochTime() + "&key=" + google_api_key };
 
-	String content{ http_call(host, url, 0, true, google_api_fingerprint) };
+	String content{ http_call(host, url, 0, true, googleCA) };
 
 	StaticJsonDocument<800> jsonDoc;
 	auto error = deserializeJson(jsonDoc, content.c_str(), DeserializationOption::NestingLimit(10));
@@ -740,15 +816,15 @@ google_timezone_result getTimezone() {
 time_safe getApiSunrise() {
 	String url{ String{"/json?lat="} +latitude + "&lng=" + longitude + "&date=today" };
 
-	String content{ http_call(api_sunrise_host, url, 0, true, api_sunrise_fingerprint) };
+	String content{ http_call(api_sunrise_host, url, 0, true, letsencryptCA) };
 
 #ifndef _DEBUG
 	if (autoDebug) {
 		Serial.println(content);
 	}
 #endif
-
-	StaticJsonDocument<800> jsonDoc;
+	
+	StaticJsonDocument<1000> jsonDoc;
 	auto error = deserializeJson(jsonDoc, content.c_str(), DeserializationOption::NestingLimit(10));
 
 	time_safe t;

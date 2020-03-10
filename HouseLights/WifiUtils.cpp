@@ -14,12 +14,13 @@ namespace WifiUtils {
 	bool connect(String essid, String password, bool blocking, unsigned timeout, IPAddress const * const ip, IPAddress const * const gateway, IPAddress const * const subnet, IPAddress const * const dns) {
 		lastTimeConnection = millis();
 		lastTimeout = timeout;
-			
-		WiFi.begin(essid.c_str(), password.c_str());
-
 		if (ip != nullptr) {
+			//Serial.println(String("Configurating static ip to ") + IpAddress2String(*ip));
 			WiFi.config(*ip, *gateway, *subnet, *dns);
 		}
+
+		WiFi.begin(essid.c_str(), password.c_str());
+
 		if (blocking) {
 			while (true) {
 				if (WiFi.status() == WL_CONNECTED) {
