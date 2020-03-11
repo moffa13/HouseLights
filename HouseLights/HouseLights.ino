@@ -17,10 +17,61 @@ and change the key of google_api_key
 static int timezone_offset = 1; // Offset to apply from NTP's time, 1 is unset, correct offset is multiple of 3600
 
 // Change these parameters to fit with your iot device
-#define RELAY_PIN 0
+#define RELAY_PIN 4
 #define LED_PIN 2
 
+// Whether or not the relay used needs 0V to output power
+#define OUTPUT_REVERSED false
+
 #define HTTP_REQUEST_TIMEOUT_MS 5000
+
+static const char* const wifi_ssid = "YOUR_SSID";
+static const char* const wifi_password = "YOUR_PASSWORD";
+static const char* const latitude = "YOUR_LATITUDE";
+static const char* const longitude = "YOUR_LONGITUDE";
+static const char* const api_sunrise_host = "api.sunrise-sunset.org";
+
+static unsigned long lastCheckTime = 0;
+static unsigned long lastTimezoneCheckTime = 0;
+static unsigned int loopRefreshInterval = 3600000;
+static const uint16_t max_google_timezone_retries = 5;
+static uint16_t google_timezone_retries = 0;
+static short lightsState = -1; // -1 auto, 0 off, 1 on
+static bool sunset_ok = false;
+static bool autoDebug = false; // If true, auto shows printInfos method 
+
+/* Interval where the lights are always on.
+Normally, when we reach the next day, the sun is not supposed to be down
+so the lights shut off */
+static unsigned int power_min_sec = 0;
+// Tell for how many seconds the lights should keep being on after midnight
+static unsigned int power_max_sec = 0;
+// When the sunrise did not happen yet, min second when to power on the lights until sunrise
+static unsigned int power_morning_min = 0;
+
+/* Time to set the lights on before the "official" sunset
+Set it to 0 to power on the lights exactly when the sunset happens
+*/
+static int sunset_warn = 0;
+static char google_api_key[40] = { 0 };
+
+static time_si parsedSunset;
+static time_si parsedSunrise;
+static time_si now_time;
+static WiFiUDP ntpUDP;
+static NTPClient timeClient(ntpUDP);
+
+/* Change these infos to fit your needs*/
+static const IPAddress dns(8, 8, 8, 8);
+static const IPAddress localIP(192, 168, 0, 223);
+static const IPAddress gateway(192, 168, 0, 1);
+static const IPAddress subnet(255, 255, 255, 0);
+static ESP8266WebServer apiServer(223);
+
+bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str = nullptr);
+void printWifiSignalStrength(String* str = nullptr);
+void printInfos(bool toSerial = true, String* str = nullptr);
+void checkWifi(bool connectAnyway = false);
 
 static const char letsencryptCA[] PROGMEM = R"EOF(
 -----BEGIN CERTIFICATE-----
@@ -80,54 +131,6 @@ USpxu6x6td0V7SvJCCosirSmIatj/9dSSVDQibet8q/7UK4v4ZUN80atnZz1yg==
 -----END CERTIFICATE-----
 
 )EOF";
-
-static const char* const wifi_ssid = "YOUR_SSID";
-static const char* const wifi_password = "YOUR_PASSWORD";
-static const char* const latitude = "YOUR_LATITUDE";
-static const char* const longitude = "YOUR_LONGITUDE";
-static const char* const api_sunrise_host = "api.sunrise-sunset.org";
-
-static unsigned long lastCheckTime = 0;
-static unsigned long lastTimezoneCheckTime = 0;
-static unsigned int loopRefreshInterval = 3600000;
-static const uint16_t max_google_timezone_retries = 5;
-static uint16_t google_timezone_retries = 0;
-static short lightsState = -1; // -1 auto, 0 off, 1 on
-static bool sunset_ok = false;
-static bool autoDebug = false; // If true, auto shows printInfos method 
-
-/* Interval where the lights are always on.
-Normally, when we reach the next day, the sun is not supposed to be down
-so the lights shut off */
-static unsigned int power_min_sec = 0;
-// Tell for how many seconds the lights should keep being on after midnight
-static unsigned int power_max_sec = 0;
-// When the sunrise did not happen yet, min second when to power on the lights until sunrise
-static unsigned int power_morning_min = 0;
-
-/* Time to set the lights on before the "official" sunset
-Set it to 0 to power on the lights exactly when the sunset happens
-*/
-static int sunset_warn = 0;
-static char google_api_key[40] = { 0 };
-
-static time_si parsedSunset;
-static time_si parsedSunrise;
-static time_si now_time;
-static WiFiUDP ntpUDP;
-static NTPClient timeClient(ntpUDP);
-
-/* Change these infos to fit your needs*/
-static const IPAddress dns(8, 8, 8, 8);
-static const IPAddress localIP(192, 168, 0, 222);
-static const IPAddress gateway(192, 168, 0, 1);
-static const IPAddress subnet(255, 255, 255, 0);
-static ESP8266WebServer apiServer(222);
-
-bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str = nullptr);
-void printWifiSignalStrength(String* str = nullptr);
-void printInfos(bool toSerial = true, String* str = nullptr);
-void checkWifi(bool connectAnyway = false);
 
 double fmod(double x, double y) {
 	return x - y * floor(x / y);
@@ -217,7 +220,7 @@ void setup() {
 
 	pinMode(RELAY_PIN, OUTPUT);
 	pinMode(LED_PIN, OUTPUT);
-	digitalWrite(RELAY_PIN, LOW);
+	digitalWrite(RELAY_PIN, OUTPUT_REVERSED ? HIGH : LOW);
 	digitalWrite(LED_PIN, HIGH);
 
 #ifdef _DEBUG
@@ -626,10 +629,11 @@ void loop() {
 void updateLightsState() {
 	if (sunset_ok || lightsState != -1) {
 		if (lightsState == 1 || (lightsState == -1 && mustBeOn(now_time, parsedSunset, false))) {
-			digitalWrite(RELAY_PIN, LOW);
+			digitalWrite(RELAY_PIN, OUTPUT_REVERSED ? LOW : HIGH);
+			
 		}
 		else {
-			digitalWrite(RELAY_PIN, HIGH);
+			digitalWrite(RELAY_PIN, OUTPUT_REVERSED ? HIGH : LOW);
 		}
 	}
 }
