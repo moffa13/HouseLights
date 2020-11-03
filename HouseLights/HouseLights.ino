@@ -25,6 +25,8 @@ static int timezone_offset = 1; // Offset to apply from NTP's time, 1 is unset, 
 
 #define HTTP_REQUEST_TIMEOUT_MS 5000
 
+//#define STATIC_IP
+
 static const char* const wifi_ssid = "YOUR_SSID";
 static const char* const wifi_password = "YOUR_PASSWORD";
 static const char* const latitude = "YOUR_LATITUDE";
@@ -62,11 +64,13 @@ static time_si now_time;
 static WiFiUDP ntpUDP;
 static NTPClient timeClient(ntpUDP);
 
-/* Change these infos to fit your needs*/
+/* Change these infos to fit your needs, if using static IP, set #define STATIC_IP*/
+#ifdef STATIC_IP
 static const IPAddress dns(8, 8, 8, 8);
 static const IPAddress localIP(192, 168, 0, 232);
 static const IPAddress gateway(192, 168, 0, 1);
 static const IPAddress subnet(255, 255, 255, 0);
+#endif
 static ESP8266WebServer apiServer(111);
 
 bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str = nullptr);
@@ -237,8 +241,12 @@ void setup() {
 	readMemory();
 
 	WiFi.mode(WIFI_STA);
+
+#ifdef STATIC_IP
 	WiFi.config(localIP, gateway, subnet, dns);
+#else
 	WiFi.hostname(device_name);
+#endif
 
 	apiServer.begin();
 
