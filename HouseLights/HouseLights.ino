@@ -35,7 +35,6 @@ static const char* const api_sunrise_host = "api.sunrise-sunset.org";
 static const char* const device_name = "IOT_HOSTNAME";
 
 static unsigned long lastCheckTime = 0;
-static unsigned long lastTimezoneCheckTime = 0;
 static unsigned int loopRefreshInterval = 3600000;
 static const uint16_t max_google_timezone_retries = 2;
 static uint16_t google_timezone_retries = 0;
@@ -71,7 +70,7 @@ static const IPAddress localIP(192, 168, 0, 232);
 static const IPAddress gateway(192, 168, 0, 1);
 static const IPAddress subnet(255, 255, 255, 0);
 #endif
-static ESP8266WebServer apiServer(111);
+static ESP8266WebServer apiServer(4445);
 
 bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str = nullptr);
 void printWifiSignalStrength(String* str = nullptr);
@@ -179,7 +178,7 @@ time_si parseTimeH24(String const& time) {
 
 bool setTimezone() {
 #ifdef USE_TIMEZONE_API	
-	if (google_api_key[0] != 0 && (millis() > lastTimezoneCheckTime + loopRefreshInterval || lastTimezoneCheckTime == 0)) { // Has a google api key configured and it is time to update
+	if (google_api_key[0] != 0) { // Has a google api key configured and it is time to update
 		google_timezone_result timezone_result;
 		do {
 			timezone_result = getTimezone();
@@ -202,21 +201,19 @@ bool setTimezone() {
 				timezone_offset = timezone_result.timezone;
 				return true;
 			}
-			else {
 #ifndef _DEBUG
 				Serial.println(String{ "Timezone did not change (" } +timezone_offset + "s)");
 #endif
 				return false;
-			}
 		}
+		return false;
 		google_timezone_retries = 0;
-		lastTimezoneCheckTime = millis();
 	}
-	else if (google_api_key[0] == 0) {
+
 #ifndef _DEBUG
 		Serial.println("Warning, google_api_key not set");
 #endif
-	}
+	return false;
 #endif
 }
 
@@ -255,6 +252,74 @@ void setup() {
 #ifndef _DEBUG
 	Serial.println("Ready.");
 #endif
+}
+
+void loop() {
+
+	static bool firstCheck = true;
+	if (firstCheck) {
+		checkWifi(true);
+#ifndef _DEBUG
+		Serial.println(String("Local ip is : " + IpAddress2String(WiFi.localIP())));
+#endif
+		timeClient.begin();
+		timeClient.forceUpdate();
+
+		firstCheck = false;
+	}
+	else {
+		checkWifi(); // Regular wifi check
+	}
+
+	update_time_from_ntp();
+
+
+	// Check the new sunset every <loopRefreshInterval>ms
+	if (millis() > lastCheckTime + loopRefreshInterval || lastCheckTime == 0) {
+
+		
+		setTimezone();
+		
+		time_safe sunset;
+		sunset.no_error = false;
+		if (timezone_offset%3600 == 0) { // We have utc time and timezone, we can get sunset time
+			sunset = getApiSunrise();
+		}
+
+		if (sunset.no_error) {
+
+			sunset_ok = true;
+
+#ifndef _DEBUG
+			Serial.println("Successfully retrieved sunset hour");
+#endif
+			parsedSunset = sunset.sunset;
+			parsedSunrise = sunset.sunrise;
+
+			adaptTimezone(parsedSunset);
+			adaptTimezone(parsedSunrise);
+
+			// Update last check time only if it succeeds
+			lastCheckTime = millis();
+		}
+		else {
+#ifndef _DEBUG
+			Serial.println("Didn't retrieve sunset hour");
+			lastCheckTime = millis() - loopRefreshInterval + 30000; // Retry after 30s
+#endif
+		}
+
+		if (autoDebug)
+			printInfos();
+
+	}
+
+	apiServer.handleClient();
+
+	updateLightsState();
+
+	yield();
+
 }
 
 void readMemory() {
@@ -382,7 +447,7 @@ void registerApiServerRequests() {
 			}
 			else if (param_name == "google_api_key") {
 				updateGoogleApiKey(apiServer.arg("param_value").c_str());
-				lastTimezoneCheckTime = 0;
+				lastCheckTime = 0;
 			}
 			else {
 				error = true;
@@ -448,21 +513,9 @@ void registerApiServerRequests() {
 		apiServer.send(200, "text/html", "refreshed sunset check...");
 		});
 
-	apiServer.on("/reset_timezone", []() {
-		lastTimezoneCheckTime = 0;
-		apiServer.send(200, "text/html", "refreshed timezone check...");
-		});
-
-	apiServer.on("/refresh_all", []() {
-		lastTimezoneCheckTime = 0;
-		lastCheckTime = 0;
-		apiServer.send(200, "text/html", "refreshed timezone & sunset check...");
-		});
-
 	apiServer.on("/wipe", HTTPMethod::HTTP_DELETE, []() {
 		wipeMemory();
 		lastCheckTime = 0;
-		lastTimezoneCheckTime = 0;
 		apiServer.send(200, "text/html", "OK");
 		});
 }
@@ -547,17 +600,11 @@ void checkWifi(bool connectAnyway){
 #endif
 }
 
-bool update_time_from_ntp() {
-	bool ret = timeClient.update();
-	if (ret) {
-#ifndef _DEBUG
-		Serial.println("Successfully retrieved UTC hour");
-#endif
-		now_time.hour = timeClient.getHours();
-		now_time.minute = timeClient.getMinutes();
-		now_time.second = timeClient.getSeconds();
-	}
-	return ret;
+void update_time_from_ntp() {
+	timeClient.update();
+	now_time.hour = timeClient.getHours();
+	now_time.minute = timeClient.getMinutes();
+	now_time.second = timeClient.getSeconds();
 }
 
 /*
@@ -576,72 +623,6 @@ void adaptTimezone(time_si& time) {
 	}
 
 	if (time.hour > 23) time.hour = time.hour - 24;
-}
-
-void loop() {
-
-	static bool firstCheck = true;
-	if (firstCheck) {
-		checkWifi(true);
-#ifndef _DEBUG
-		Serial.println(String("Local ip is : " + IpAddress2String(WiFi.localIP())));
-#endif
-		timeClient.begin();
-		firstCheck = false;
-	}
-	else {
-		checkWifi(); // Regular wifi check
-	}
-
-
-	// Check the new sunset every <loopRefreshInterval>ms
-	if (millis() > lastCheckTime + loopRefreshInterval || lastCheckTime == 0) {
-
-		bool ntpOK = update_time_from_ntp(); 
-		if (ntpOK) {
-			setTimezone();
-		}
-		
-		time_safe sunset;
-		sunset.no_error = false;
-		if (ntpOK && timezone_offset != 1) { // We have utc time and timezone, we can get sunset time
-			sunset = getApiSunrise();
-		}
-
-		if (sunset.no_error) { 
-
-			sunset_ok = true;
-
-#ifndef _DEBUG
-			Serial.println("Successfully retrieved sunset hour");
-#endif
-			parsedSunset = sunset.sunset;
-			parsedSunrise = sunset.sunrise;
-
-			adaptTimezone(parsedSunset);
-			adaptTimezone(parsedSunrise);
-
-			// Update last check time only if it succeeds
-			lastCheckTime = millis();
-		}
-		else {
-#ifndef _DEBUG
-			Serial.println("Didn't retrieve sunset hour");
-			lastCheckTime = millis() - loopRefreshInterval + 30000; // Retry after 30s
-#endif
-		}
-
-		if (autoDebug)
-			printInfos();
-
-	}
-
-	apiServer.handleClient();
-
-	updateLightsState();
-
-	yield();
-
 }
 
 void updateLightsState() {
