@@ -459,10 +459,10 @@ void registerApiServerRequests() {
 		});
 }
 
-String http_call(String host, String url, ushort port = 0, bool ssl = true, const char* trustedCert = nullptr, size_t certSize = 0) {
+String http_call(String host, String url, ushort port = 0, bool ssl = true, const char* trustedCert = nullptr) {
 
-	WiFiClientSecure client;
-	X509List cert;
+	BearSSL::WiFiClientSecure client;
+	BearSSL::X509List cert;
 
 	if (ssl) {
 		//client.setCertificate(reinterpret_cast<const uint8_t*>(trustedCert), certSize);
@@ -777,7 +777,7 @@ google_timezone_result getTimezone() {
 
 	String url{ String{"/maps/api/timezone/json?location="} +latitude + "," + longitude + "&timestamp=" + timeClient.getEpochTime() + "&key=" + google_api_key };
 
-	String content{ http_call(host, url, 0, true, googleCA, sizeof(googleCA) / sizeof(googleCA[0])) };
+	String content{ http_call(host, url, 0, true, googleCA) };
 
 	StaticJsonDocument<800> jsonDoc;
 	auto error = deserializeJson(jsonDoc, content.c_str(), DeserializationOption::NestingLimit(10));
@@ -830,7 +830,7 @@ google_timezone_result getTimezone() {
 time_safe getApiSunrise() {
 	String url{ String{"/json?lat="} +latitude + "&lng=" + longitude + "&date=today" };
 
-	String content{ http_call(api_sunrise_host, url, 0, true, letsencryptCA, sizeof(letsencryptCA) / sizeof(letsencryptCA[0])) };
+	String content{ http_call(api_sunrise_host, url, 0, true, letsencryptCA) };
 
 #ifndef _DEBUG
 	if (autoDebug) {
