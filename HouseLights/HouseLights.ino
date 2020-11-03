@@ -30,11 +30,12 @@ static const char* const wifi_password = "YOUR_PASSWORD";
 static const char* const latitude = "YOUR_LATITUDE";
 static const char* const longitude = "YOUR_LONGITUDE";
 static const char* const api_sunrise_host = "api.sunrise-sunset.org";
+static const char* const device_name = "IOT_HOSTNAME";
 
 static unsigned long lastCheckTime = 0;
 static unsigned long lastTimezoneCheckTime = 0;
 static unsigned int loopRefreshInterval = 3600000;
-static const uint16_t max_google_timezone_retries = 5;
+static const uint16_t max_google_timezone_retries = 2;
 static uint16_t google_timezone_retries = 0;
 static short lightsState = -1; // -1 auto, 0 off, 1 on
 static bool sunset_ok = false;
@@ -63,10 +64,10 @@ static NTPClient timeClient(ntpUDP);
 
 /* Change these infos to fit your needs*/
 static const IPAddress dns(8, 8, 8, 8);
-static const IPAddress localIP(192, 168, 0, 223);
+static const IPAddress localIP(192, 168, 0, 232);
 static const IPAddress gateway(192, 168, 0, 1);
 static const IPAddress subnet(255, 255, 255, 0);
-static ESP8266WebServer apiServer(223);
+static ESP8266WebServer apiServer(111);
 
 bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str = nullptr);
 void printWifiSignalStrength(String* str = nullptr);
@@ -174,18 +175,17 @@ time_si parseTimeH24(String const& time) {
 
 bool setTimezone() {
 #ifdef USE_TIMEZONE_API	
-	if ((google_api_key[0] != 0 && millis() > lastTimezoneCheckTime + loopRefreshInterval) || lastTimezoneCheckTime == 0) { // Has a google api key configured and it is time to update
+	if (google_api_key[0] != 0 && (millis() > lastTimezoneCheckTime + loopRefreshInterval || lastTimezoneCheckTime == 0)) { // Has a google api key configured and it is time to update
 		google_timezone_result timezone_result;
 		do {
-			checkWifi();
 			timezone_result = getTimezone();
 
 			if (timezone_result.error) {
 				google_timezone_retries++;
 #ifndef _DEBUG
-				Serial.println("Failed retrieving timezone, retrying in 1 second");
+				Serial.println("Failed retrieving timezone, retrying in 1/4th of a second");
 #endif
-				delay(1000);
+				delay(250);
 			}
 		} while (timezone_result.error && google_timezone_retries != max_google_timezone_retries); // Retry if google timezone returned an error
 
@@ -236,16 +236,9 @@ void setup() {
 
 	readMemory();
 
-	checkWifi(true);
-
-#ifndef _DEBUG
-	Serial.println(String("Local ip is : " + IpAddress2String(WiFi.localIP())));
-#endif
-
-	timeClient.begin();
-	timeClient.forceUpdate(); // At this point we should get UTC time
-
-	setTimezone();
+	WiFi.mode(WIFI_STA);
+	WiFi.config(localIP, gateway, subnet, dns);
+	WiFi.hostname(device_name);
 
 	apiServer.begin();
 
@@ -466,12 +459,13 @@ void registerApiServerRequests() {
 		});
 }
 
-String http_call(String host, String url, ushort port = 0, bool ssl = true, const char* trustedCert = nullptr) {
+String http_call(String host, String url, ushort port = 0, bool ssl = true, const char* trustedCert = nullptr, size_t certSize = 0) {
 
-	BearSSL::WiFiClientSecure client;
-	BearSSL::X509List cert;
+	WiFiClientSecure client;
+	X509List cert;
 
 	if (ssl) {
+		//client.setCertificate(reinterpret_cast<const uint8_t*>(trustedCert), certSize);
 		cert.append(trustedCert);
 		client.setTrustAnchors(&cert);
 		client.setX509Time(timeClient.getEpochTime());
@@ -529,9 +523,7 @@ void checkWifi(bool connectAnyway){
 	digitalWrite(LED_PIN, HIGH);
 	bool connected{ false };
 	do {
-		WiFi.mode(WIFI_STA);
-		WiFi.setAutoReconnect(true);
-		connected = WifiUtils::connect(wifi_ssid, wifi_password, true, 15, &localIP, &gateway, &subnet, &dns);
+		connected = WifiUtils::connect(wifi_ssid, wifi_password, true, 15);
 		if (!connected) {
 #ifndef _DEBUG
 			Serial.println("Could not connnect to WiFi, retrying.");
@@ -547,11 +539,17 @@ void checkWifi(bool connectAnyway){
 #endif
 }
 
-void update_time_from_ntp() {
-	timeClient.update();
-	now_time.hour = timeClient.getHours();
-	now_time.minute = timeClient.getMinutes();
-	now_time.second = timeClient.getSeconds();
+bool update_time_from_ntp() {
+	bool ret = timeClient.update();
+	if (ret) {
+#ifndef _DEBUG
+		Serial.println("Successfully retrieved UTC hour");
+#endif
+		now_time.hour = timeClient.getHours();
+		now_time.minute = timeClient.getMinutes();
+		now_time.second = timeClient.getSeconds();
+	}
+	return ret;
 }
 
 /*
@@ -574,26 +572,40 @@ void adaptTimezone(time_si& time) {
 
 void loop() {
 
-	update_time_from_ntp();
+	static bool firstCheck = true;
+	if (firstCheck) {
+		checkWifi(true);
+#ifndef _DEBUG
+		Serial.println(String("Local ip is : " + IpAddress2String(WiFi.localIP())));
+#endif
+		timeClient.begin();
+		firstCheck = false;
+	}
+	else {
+		checkWifi(); // Regular wifi check
+	}
+
 
 	// Check the new sunset every <loopRefreshInterval>ms
 	if (millis() > lastCheckTime + loopRefreshInterval || lastCheckTime == 0) {
 
-		checkWifi();
-
-		// If timezone's changed, update the time
-		if (setTimezone()) {
-			update_time_from_ntp();
+		bool ntpOK = update_time_from_ntp(); 
+		if (ntpOK) {
+			setTimezone();
 		}
-		time_safe const sunset = getApiSunrise();
+		
+		time_safe sunset;
+		sunset.no_error = false;
+		if (ntpOK && timezone_offset != 1) { // We have utc time and timezone, we can get sunset time
+			sunset = getApiSunrise();
+		}
 
-		if (sunset.no_error) {
+		if (sunset.no_error) { 
 
 			sunset_ok = true;
 
 #ifndef _DEBUG
-			if (autoDebug)
-				Serial.println("Successfully retrieved sunset hour");
+			Serial.println("Successfully retrieved sunset hour");
 #endif
 			parsedSunset = sunset.sunset;
 			parsedSunrise = sunset.sunrise;
@@ -601,15 +613,13 @@ void loop() {
 			adaptTimezone(parsedSunset);
 			adaptTimezone(parsedSunrise);
 
-
-
 			// Update last check time only if it succeeds
 			lastCheckTime = millis();
 		}
 		else {
 #ifndef _DEBUG
 			Serial.println("Didn't retrieve sunset hour");
-			lastCheckTime = millis() - loopRefreshInterval + 1000;
+			lastCheckTime = millis() - loopRefreshInterval + 30000; // Retry after 30s
 #endif
 		}
 
@@ -630,7 +640,6 @@ void updateLightsState() {
 	if (sunset_ok || lightsState != -1) {
 		if (lightsState == 1 || (lightsState == -1 && mustBeOn(now_time, parsedSunset, false))) {
 			digitalWrite(RELAY_PIN, OUTPUT_REVERSED ? LOW : HIGH);
-			
 		}
 		else {
 			digitalWrite(RELAY_PIN, OUTPUT_REVERSED ? HIGH : LOW);
@@ -768,7 +777,7 @@ google_timezone_result getTimezone() {
 
 	String url{ String{"/maps/api/timezone/json?location="} +latitude + "," + longitude + "&timestamp=" + timeClient.getEpochTime() + "&key=" + google_api_key };
 
-	String content{ http_call(host, url, 0, true, googleCA) };
+	String content{ http_call(host, url, 0, true, googleCA, sizeof(googleCA) / sizeof(googleCA[0])) };
 
 	StaticJsonDocument<800> jsonDoc;
 	auto error = deserializeJson(jsonDoc, content.c_str(), DeserializationOption::NestingLimit(10));
@@ -784,6 +793,7 @@ google_timezone_result getTimezone() {
 #ifndef _DEBUG
 		Serial.println("Error parsing Google api JSON");
 		Serial.println(jsonDoc["status"].as<String>());
+		Serial.println(jsonDoc["errorMessage"].as<String>());
 #endif
 		res.error = true;
 		if (jsonDoc["status"] == "INVALID_REQUEST") {
@@ -806,11 +816,11 @@ google_timezone_result getTimezone() {
 		}
 
 	}
-	else if (autoDebug) {
 #ifndef _DEBUG
+	else {
 		Serial.println("Successfully received from Google Maps API");
-#endif
 	}
+#endif
 
 	res.timezone = jsonDoc["dstOffset"].as<int>() + jsonDoc["rawOffset"].as<int>();
 
@@ -820,7 +830,7 @@ google_timezone_result getTimezone() {
 time_safe getApiSunrise() {
 	String url{ String{"/json?lat="} +latitude + "&lng=" + longitude + "&date=today" };
 
-	String content{ http_call(api_sunrise_host, url, 0, true, letsencryptCA) };
+	String content{ http_call(api_sunrise_host, url, 0, true, letsencryptCA, sizeof(letsencryptCA) / sizeof(letsencryptCA[0])) };
 
 #ifndef _DEBUG
 	if (autoDebug) {

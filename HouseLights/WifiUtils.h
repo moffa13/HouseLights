@@ -21,7 +21,7 @@ namespace WifiUtils {
 	};
 
 	// Blocking until connected
-	bool connect(String essid, String password, bool blocking = true, unsigned timeout = 15, IPAddress const * const ip = nullptr, IPAddress const * const gateway = nullptr, IPAddress const * const subnet = nullptr, IPAddress const * const dns = nullptr);
+	bool connect(String essid, String password, bool blocking = true, unsigned timeout = 15);
 
 	bool isWifiConnected();
 
