@@ -31,13 +31,13 @@ static const char* const wifi_ssid = "YOUR_SSID";
 static const char* const wifi_password = "YOUR_PASSWORD";
 static const char* const latitude = "YOUR_LATITUDE";
 static const char* const longitude = "YOUR_LONGITUDE";
-static const char* const api_sunrise_host = "api.sunrise-sunset.org";
 static const char* const device_name = "IOT_HOSTNAME";
+
+static const char* const api_sunrise_host = "api.sunrise-sunset.org";
 
 static unsigned long lastCheckTime = 0;
 static unsigned int loopRefreshInterval = 3600000;
 static const uint16_t max_google_timezone_retries = 2;
-static uint16_t google_timezone_retries = 0;
 static short lightsState = -1; // -1 auto, 0 off, 1 on
 static bool sunset_ok = false;
 static bool autoDebug = false; // If true, auto shows printInfos method 
@@ -179,6 +179,7 @@ time_si parseTimeH24(String const& time) {
 bool setTimezone() {
 #ifdef USE_TIMEZONE_API	
 	if (google_api_key[0] != 0) { // Has a google api key configured and it is time to update
+		uint16_t google_timezone_retries = 0;
 		google_timezone_result timezone_result;
 		do {
 			timezone_result = getTimezone();
@@ -190,7 +191,7 @@ bool setTimezone() {
 #endif
 				delay(250);
 			}
-		} while (timezone_result.error && google_timezone_retries != max_google_timezone_retries); // Retry if google timezone returned an error
+		} while (timezone_result.error && google_timezone_retries < max_google_timezone_retries); // Retry if google timezone returned an error
 
 		if (!timezone_result.error) {
 			if (timezone_offset != timezone_result.timezone) {
