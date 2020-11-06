@@ -717,8 +717,8 @@ bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str
 
 	if (now_time >= power_min_sec && now_time <= power_max_sec) return true;
 
-	if (sunset_in_s < sunset_warn) {
-		if (sunset_warn > 0) {
+	if (sunset_in_s <= sunset_warn) {
+		if (sunset_warn >= 0) {
 			if (print)
 				infos += String{ "Warn of " } +getSecondToTime(sunset_warn) + " before sunset happened\n";
 		}
