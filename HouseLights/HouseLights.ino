@@ -706,58 +706,54 @@ bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str
 	int now_time = getTimeSecond(now);
 	int sunset_in_s = sunset_time - now_time; // if positive, sunset did not happen yet, if negative, sunset happend and next is tomorrow
 	String infos;
+	bool ret;
 
-	if (print) {
-		if (sunset_in_s >= 0) {
-			infos += String{ "Sunset in : " } +getSecondToTime(sunset_in_s) + "\n";
-		}
-		else {
-			infos += String{ "Sunset happened " } +getSecondToTime(-sunset_in_s) + " ago\n";
-		}
+	if (sunset_in_s >= 0) {
+		infos += String{ "Sunset in : " } +getSecondToTime(sunset_in_s) + "\n";
+	}
+	else {
+		infos += String{ "Sunset happened " } +getSecondToTime(-sunset_in_s) + " ago\n";
 	}
 
-	if (now_time >= power_min_sec && now_time <= power_max_sec) return true;
-
-	if (sunset_in_s <= sunset_warn) {
-		if (sunset_warn >= 0) {
-			if (print)
-				infos += String{ "Warn of " } +getSecondToTime(sunset_warn) + " before sunset happened\n";
-		}
-		else {
-			if (print)
-				infos += String{ "Warn of " } +getSecondToTime(-sunset_warn) + " after sunset happened\n";
-		}
-		if (print) {
-			if (str != nullptr) {
-				(*str) += infos;
-			}
-			else {
-#ifndef _DEBUG
-				Serial.println(infos);
-#endif
-			}
-		}
-		return true;
+	if (now_time >= power_min_sec && now_time <= power_max_sec) {
+		infos += String{ "On Period after sunset enabled\n" };
+		ret = true;
 	}
 	else if (power_morning_min != 0 && now_time >= power_morning_min && now_time < getTimeSecond(parsedSunrise)) {
 		infos += String{ "Morning mode before sunrise\n" };
-		return true;
+		ret = true;
+	}
+	else if (sunset_in_s <= sunset_warn) {
+		if (sunset_warn >= 0) {
+			infos += String{ "Warn of " } +getSecondToTime(sunset_warn) + " before sunset happened\n";
+		}
+		else {
+			infos += String{ "Warn of " } +getSecondToTime(-sunset_warn) + " after sunset happened\n";
+		}
+		ret = true;
 	}
 	else {
-		if (print) {
-			infos += "No Warn\n";
-			if (str != nullptr) {
-				(*str) += infos;
-			}
-			else {
-#ifndef _DEBUG
-				Serial.println(infos);
-#endif
-			}
-		}
-		return false;
+		infos += "No Warn\n";
+		ret = false;
 	}
+
+
+	if (print) {
+		if (str != nullptr) {
+			(*str) += infos;
+		}
+		else {
+#ifndef _DEBUG
+			Serial.println(infos);
+#endif
+		}
+	}
+
+	return ret;
+
 }
+
+
 
 google_timezone_result getTimezone() {
 
