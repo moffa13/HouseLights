@@ -741,8 +741,10 @@ bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str
 			ret = false;
 		}
 	}
-	else if (now_time > sunset_time_corrected) {
-		if (now_time >= power_min_sec && (power_max_sec < sunrise_time || now_time < power_max_sec)) {
+	else if (now_time > sunset_time_corrected) { // After sunset
+
+		// If current time is not past the max and the max is within the correct timing
+		if (now_time >= power_min_sec && (power_max_sec < sunrise_time || now_time < power_max_sec)) { 
 			infos += String{ "On Period after sunset enabled\n" };
 			ret = true;
 		}
