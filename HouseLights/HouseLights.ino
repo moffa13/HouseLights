@@ -6,6 +6,7 @@
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <ArduinoJson.h>
+#include <ArduinoOTA.h>
 #include "defs.h"
 #include "WifiUtils.h"
 
@@ -253,6 +254,8 @@ void setup() {
 #ifndef _DEBUG
 	Serial.println("Ready.");
 #endif
+
+	ArduinoOTA.begin();
 }
 
 void loop() {
@@ -314,6 +317,8 @@ void loop() {
 			printInfos();
 
 	}
+
+	ArduinoOTA.handle();
 
 	apiServer.handleClient();
 
@@ -715,11 +720,15 @@ bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str
 		infos += String{ "Sunset happened " } +getSecondToTime(-sunset_in_s) + " ago\n";
 	}
 
-	if (now_time >= power_min_sec && now_time <= power_max_sec) {
+	if (power_max_sec <= 86400 && now_time >= power_max_sec) {
+		infos += String{ "Off period\n" };
+		ret = false;
+	}
+	else if (now_time >= power_min_sec && now_time <= power_max_sec) { // period where it should stay ON
 		infos += String{ "On Period after sunset enabled\n" };
 		ret = true;
 	}
-	else if (power_morning_min != 0 && now_time >= power_morning_min && now_time < getTimeSecond(parsedSunrise)) {
+	else if (power_morning_min != 0 && now_time >= power_morning_min && now_time < getTimeSecond(parsedSunrise)) { // period between a fixed time and sunrise
 		infos += String{ "Morning mode before sunrise\n" };
 		ret = true;
 	}
