@@ -58,6 +58,11 @@ Set it to 0 to power on the lights exactly when the sunset happens
 static int sunset_warn = 0;
 static char google_api_key[40] = { 0 };
 
+static float blinkFrequency = 15.0f; // Hz
+static bool blinkMode = false;
+static unsigned long lastBlink = 0;
+static bool blinkStatus = true;
+
 static time_si parsedSunset;
 static time_si parsedSunrise;
 static time_si now_time;
@@ -633,7 +638,7 @@ void adaptTimezone(time_si& time) {
 
 void updateLightsState() {
 	if (sunset_ok || lightsState != -1) {
-		if (lightsState == 1 || (lightsState == -1 && mustBeOn(now_time, parsedSunset, false))) {
+		if (mustBeOn(now_time, parsedSunset, false)) {
 			digitalWrite(RELAY_PIN, OUTPUT_REVERSED ? LOW : HIGH);
 		}
 		else {
@@ -707,14 +712,12 @@ String getSecondToTime(unsigned int totalSeconds) {
 
 bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str) {
 
-	int sunset_time = getTimeSecond(sunset);
-	int sunrise_time = getTimeSecond(parsedSunrise);
-	int now_time = getTimeSecond(now);
-	int sunset_in_s = sunset_time - now_time; // if positive, sunset did not happen yet, if negative, sunset happend and next is tomorrow
-	int sunset_time_corrected = sunset_time - sunset_warn; // Corrected sunset value.
-
 	String infos;
 	bool ret;
+
+	int sunset_time = getTimeSecond(sunset);
+	int now_time = getTimeSecond(now);
+	int sunset_in_s = sunset_time - now_time; // if positive, sunset did not happen yet, if negative, sunset happend and next is tomorrow
 
 	if (sunset_in_s >= 0) {
 		infos += String{ "Sunset in : " } +getSecondToTime(sunset_in_s) + "\n";
@@ -723,37 +726,51 @@ bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str
 		infos += String{ "Sunset happened " } +getSecondToTime(-sunset_in_s) + " ago\n";
 	}
 
-	if (now_time >= sunrise_time && now_time <= sunset_time_corrected) { // between sunrise and sunset there should be no light
-		infos += "Off\n";
+	if (lightsState == 1) {
+		infos += "Forced on\n";
+		ret = true;
+	}
+	else if (lightsState == 0) {
+		infos += "Forced off\n";
 		ret = false;
 	}
-	else if (now_time < sunrise_time) { // Before sunrise
-		if (now_time >= power_morning_min) {
-			infos += String{ "Morning mode before sunrise\n" };
-			ret = true;
-		}
-		else if (power_max_sec < sunrise_time && now_time >= power_min_sec && now_time <= power_max_sec) {
-			infos += String{ "On Period after sunset enabled\n" };
-			ret = true;
-		}
-		else {
-			infos += String{ "Off\n" };
+	else {
+		
+		int sunrise_time = getTimeSecond(parsedSunrise);
+		int sunset_time_corrected = sunset_time - sunset_warn; // Corrected sunset value.
+
+
+		if (now_time >= sunrise_time && now_time <= sunset_time_corrected) { // between sunrise and sunset there should be no light
+			infos += "Off\n";
 			ret = false;
 		}
-	}
-	else if (now_time > sunset_time_corrected) { // After sunset
-
-		// If current time is not past the max and the max is within the correct timing
-		if (now_time >= power_min_sec && (power_max_sec < sunrise_time || now_time < power_max_sec)) { 
-			infos += String{ "On Period after sunset enabled\n" };
-			ret = true;
+		else if (now_time < sunrise_time) { // Before sunrise
+			if (now_time >= power_morning_min) {
+				infos += String{ "Morning mode before sunrise\n" };
+				ret = true;
+			}
+			else if (power_max_sec < sunrise_time && now_time >= power_min_sec && now_time <= power_max_sec) {
+				infos += String{ "On Period after sunset enabled\n" };
+				ret = true;
+			}
+			else {
+				infos += String{ "Off\n" };
+				ret = false;
+			}
 		}
-		else {
-			infos += String{ "Off\n" };
-			ret = false;
+		else if (now_time > sunset_time_corrected) { // After sunset
+
+			// If current time is not past the max and the max is within the correct timing
+			if (now_time >= power_min_sec && (power_max_sec < sunrise_time || now_time < power_max_sec)) {
+				infos += String{ "On Period after sunset enabled\n" };
+				ret = true;
+			}
+			else {
+				infos += String{ "Off\n" };
+				ret = false;
+			}
 		}
 	}
-
 
 	if (print) {
 		if (str != nullptr) {
@@ -763,6 +780,25 @@ bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str
 #ifndef _DEBUG
 			Serial.println(infos);
 #endif
+		}
+	}
+
+	// Blink mode
+	if (blinkMode && ret) { // If blink mode activated && light should be on
+		unsigned long now = millis();
+		if (lastBlink == 0) { // First init let it on
+			lastBlink = millis();
+		}
+		else if (blinkFrequency <= 0) { // Enable creepy random blink
+			ret = random(0, 2);
+		}
+		else if (now - lastBlink >= (1 / blinkFrequency) * 1000) {
+			blinkStatus = !blinkStatus;
+			lastBlink = now;
+			ret = blinkStatus;
+		}
+		else {
+			ret = blinkStatus;
 		}
 	}
 
