@@ -255,7 +255,6 @@ void setup() {
 	Serial.println("Ready.");
 #endif
 
-	ArduinoOTA.begin();
 }
 
 void loop() {
@@ -266,6 +265,7 @@ void loop() {
 #ifndef _DEBUG
 		Serial.println(String("Local ip is : " + IpAddress2String(WiFi.localIP())));
 #endif
+		ArduinoOTA.begin();
 		timeClient.begin();
 		timeClient.forceUpdate();
 
