@@ -58,7 +58,7 @@ Set it to 0 to power on the lights exactly when the sunset happens
 static int sunset_warn = 0;
 static char google_api_key[40] = { 0 };
 
-static float blinkFrequency = 15.0f; // Hz
+static float blinkFrequency = 1.0f; // Hz
 static bool blinkMode = false;
 static unsigned long lastBlink = 0;
 static bool blinkStatus = true;
@@ -184,8 +184,8 @@ time_si parseTimeH24(String const& time) {
 
 bool setTimezone() {
 #ifdef USE_TIMEZONE_API	
-	if (google_api_key[0] != 0) { // Has a google api key configured and it is time to update
-		uint16_t google_timezone_retries = 0;
+	if (google_api_key[0] != 0) { // Has a google api key configured
+		uint8_t google_timezone_retries = 0;
 		google_timezone_result timezone_result;
 		do {
 			timezone_result = getTimezone();
@@ -214,7 +214,6 @@ bool setTimezone() {
 				return false;
 		}
 		return false;
-		google_timezone_retries = 0;
 	}
 
 #ifndef _DEBUG
@@ -745,7 +744,7 @@ bool mustBeOn(time_si const& now, time_si const& sunset, bool print, String* str
 			ret = false;
 		}
 		else if (now_time < sunrise_time) { // Before sunrise
-			if (now_time >= power_morning_min) {
+			if (power_morning_min != 0 && now_time >= power_morning_min) {
 				infos += String{ "Morning mode before sunrise\n" };
 				ret = true;
 			}
@@ -877,7 +876,7 @@ time_safe getApiSunrise() {
 	}
 #endif
 	
-	StaticJsonDocument<1000> jsonDoc;
+	StaticJsonDocument<700> jsonDoc;
 	auto error = deserializeJson(jsonDoc, content.c_str(), DeserializationOption::NestingLimit(10));
 
 	time_safe t;
